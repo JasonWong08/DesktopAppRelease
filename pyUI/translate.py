@@ -115,6 +115,9 @@ textEN = {
     'Behavior':'  Behavior',
     'Clear':'Clear',
     'max':'max',
+    'Console':'Console',
+    'Copy':'Copy',
+    'Console log copied to clipboard':'Console log copied to clipboard',
 
     'Manual mode':'Manual mode',
     'Replug mode':'Replug mode',
@@ -415,6 +418,9 @@ textCN = {
     'Behavior':'   行为',
     'Clear':'清空',
     'max':'最快',
+    'Console':'终端',
+    'Copy':'复制',
+    'Console log copied to clipboard':'终端日志已复制到剪贴板',
     'Calibrate':'校准位',
     'Auto':'自动',
     'AutoCali failed': '''自动校准机械爪关节舵机失败！\n
@@ -704,6 +710,9 @@ textCN_TW = {
     'Behavior':'   行為',
     'Clear':'清空',
     'max':'最快',
+    'Console':'終端',
+    'Copy':'複製',
+    'Console log copied to clipboard':'終端日誌已複製到剪貼板',
     'Calibrate':'校準位',
     'Auto':'自動',
     'AutoCali failed': '''自動校準機械爪關節舵機失敗！\n
@@ -996,6 +1005,9 @@ textDE = {
     'Behavior':'Verhalten',
     'Clear':'Löschen',
     'max':'max.',
+    'Console':'Konsole',
+    'Copy':'Kopieren',
+    'Console log copied to clipboard':'Konsolenprotokoll in die Zwischenablage kopiert',
 
     'Manual mode':'Manueller Modus',
     'Replug mode':'Replug-Modus',
@@ -1293,6 +1305,9 @@ textTH = {
     'Behavior':' พฤติกรรม',
     'Clear':'ล้าง',
     'max':'สูงสุด',
+    'Console':'คอนโซล',
+    'Copy':'คัดลอก',
+    'Console log copied to clipboard':'คัดลอกบันทึกคอนโซลไปยังคลิปบอร์ดแล้ว',
 
     'Manual mode':'โหมดแมนนวล',
     'Replug mode':'โหมดเสียบปลั๊ก',
@@ -1589,6 +1604,9 @@ textFR={
     'Behavior':' Comportement',
     'Clear':'Effacer',
     'max':'max',
+    'Console':'Console',
+    'Copy':'Copier',
+    'Console log copied to clipboard':'Journal de la console copié dans le presse-papiers',
 
     'Manual mode':'Mode manuel',
     'Replug mode':'Mode Replug',
@@ -1883,6 +1901,9 @@ textJP={
     'Behavior':'ビヘイビア',
     'Clear':'クリア',
     'max':'最大',
+    'Console':'コンソール',
+    'Copy':'コピー',
+    'Console log copied to clipboard':'コンソールログがクリップボードにコピーされました',
 
     'Manual mode':'マニュアルモード',
     'Replug mode':'リプラグモード',
@@ -2165,6 +2186,9 @@ textIT = {
     'Behavior':'Comportamento',
     'Clear':'Cancella',
     'max':'max',
+    'Console':'Console',
+    'Copy':'Copia',
+    'Console log copied to clipboard':'Registro della console copiato negli appunti',
 
     'Manual mode':'Modalità manuale',
     'Replug mode':'Modalità di ricarica',
@@ -2461,6 +2485,9 @@ textRU = {
     'Behavior':'  Поведение',
     'Clear':'Очистить',
     'max':'макс',
+    'Console':'Консоль',
+    'Copy':'Копировать',
+    'Console log copied to clipboard':'Журнал консоли скопирован в буфер обмена',
 
     'Manual mode':'Ручной режим',
     'Replug mode':'Переподключение',

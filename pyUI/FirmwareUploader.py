@@ -12,7 +12,12 @@ from commonVar import *
 import subprocess
 from tkinter import ttk
 from tkinter import filedialog
+from tkinter.scrolledtext import ScrolledText
 import pathlib
+import logging
+import queue
+import threading
+import time
 # import webbrowser
 
 regularW = 14
@@ -22,6 +27,21 @@ BiBoard_version_list = ['BiBoard_V0_1', 'BiBoard_V0_2', 'BiBoard_V1_0']
 
 def txt(key):
     return language.get(key, textEN[key])
+
+# Custom logging handler to redirect logs to Console text widget
+class ConsoleHandler(logging.Handler):
+    def __init__(self, text_widget, log_queue):
+        super().__init__()
+        self.text_widget = text_widget
+        self.log_queue = log_queue
+        
+    def emit(self, record):
+        try:
+            msg = self.format(record) + '\n'
+            # Put log message in queue for thread-safe GUI update
+            self.log_queue.put(msg)
+        except Exception:
+            self.handleError(record)
     
 class Uploader:
     def __init__(self,model,lan):
@@ -97,6 +117,9 @@ class Uploader:
         
         # Start port checking in main thread using timer
         self.win.after(500, self.checkPortsMainThread)
+        
+        # Start console log update from queue
+        self.win.after(self.logUpdateInterval, self.updateConsoleFromQueue)
 
         self.win.focus_force()    # force the main interface to get focus
         self.win.mainloop()
@@ -327,19 +350,71 @@ class Uploader:
         self.statusBar.grid(row=0, ipadx=5, padx=5, sticky=W + E + N + S)
         fmStatus.columnconfigure(0, weight=1)
 
+        # Console frame for displaying log file content
+        fmConsole = ttk.Frame(self.win)
+        fmConsole.grid(row=5, columnspan=3, ipadx=2, padx=2, pady=5, sticky=W + E + N + S)
+        
+        # Header frame for Console label and Clear button
+        fmConsoleHeader = ttk.Frame(fmConsole)
+        fmConsoleHeader.grid(row=0, column=0, columnspan=2, sticky=W + E)
+        
+        self.labConsole = ttk.Label(fmConsoleHeader, text=txt('Console') + ':', font=('Arial', 14, 'bold'))
+        self.labConsole.grid(row=0, column=0, ipadx=5, padx=5, sticky=W)
+        
+        self.btnCopyConsole = Button(fmConsoleHeader, text=txt('Copy'), font=('Arial', 10),
+                                    command=self.copyConsole)
+        self.btnCopyConsole.grid(row=0, column=1, ipadx=5, padx=5, sticky=E)
+        
+        self.btnClearConsole = Button(fmConsoleHeader, text=txt('Clear'), font=('Arial', 10),
+                                     command=self.clearConsole)
+        self.btnClearConsole.grid(row=0, column=2, ipadx=5, padx=5, sticky=E)
+        
+        fmConsoleHeader.columnconfigure(0, weight=1)
+        
+        # Create scrollbars for the console text
+        scrollbarY = Scrollbar(fmConsole)
+        scrollbarY.grid(row=1, column=1, sticky=N + S)
+        
+        scrollbarX = Scrollbar(fmConsole, orient=HORIZONTAL)
+        scrollbarX.grid(row=2, column=0, sticky=W + E)
+        
+        # Create console text widget
+        self.txtConsole = Text(fmConsole, height=15, width=80, font=('Courier', 9),
+                              wrap=NONE, state=DISABLED,
+                              yscrollcommand=scrollbarY.set,
+                              xscrollcommand=scrollbarX.set)
+        self.txtConsole.grid(row=1, column=0, ipadx=5, padx=5, sticky=W + E + N + S)
+        
+        scrollbarY.config(command=self.txtConsole.yview)
+        scrollbarX.config(command=self.txtConsole.xview)
+        
+        fmConsole.columnconfigure(0, weight=1)
+        fmConsole.rowconfigure(1, weight=1)
+        
+        # Initialize console logging system
+        self.logQueue = queue.Queue()
+        self.logUpdateInterval = 20  # Update every 20ms for better real-time display (was 50ms)
+        self.isFirstOperation = True  # Flag to track if this is the first firmware operation
+        
+        # Set up custom logging handler to redirect logs to Console
+        self.setupConsoleLogging()
+
     def uploadeModeOnly(self):
         self.bParaUpload = False
         self.bFacReset = False
+        self.prepareConsoleForNewOperation()
         self.autoupload()
 
     def factoryReset(self):
         self.bParaUpload = True
         self.bFacReset = True
+        self.prepareConsoleForNewOperation()
         self.autoupload()
 
     def upgrade(self):
         self.bParaUpload = True
         self.bFacReset = False
+        self.prepareConsoleForNewOperation()
         self.autoupload()
 
     def updatePortlist(self):
@@ -743,6 +818,19 @@ class Uploader:
             # Use update_idletasks() instead of update() to avoid event loop nesting
             # This updates the display without processing events, which is safer
             self.win.update_idletasks()
+            
+            # Manually process console queue for immediate display during serial operations
+            try:
+                while not self.logQueue.empty():
+                    msg = self.logQueue.get_nowait()
+                    if msg:
+                        self.txtConsole.config(state=NORMAL)
+                        self.txtConsole.insert(END, msg)
+                        self.txtConsole.see(END)
+                        self.txtConsole.config(state=DISABLED)
+            except:
+                pass
+            
             time.sleep(0.01)
             if serObj.main_engine.in_waiting > 0:
                 x = str(serObj.main_engine.readline())
@@ -909,19 +997,6 @@ class Uploader:
     def autoupload(self):
         # No need to pause thread anymore - using main-thread timer now
         try:
-            with open("./logfile.log", "r+", encoding="ISO-8859-1") as logfile:
-                lines = logfile.readlines()
-            time.sleep(1)
-            # Read the first three lines
-            first_three_lines = lines[:3]
-            for line in lines:
-                line = line.strip()  # remove the line break from each line
-                logger.debug(f"{line}")
-                if (".ino.hex" in line) or (".ino.bin" in line):
-                    with open("./logfile.log", "w+", encoding="ISO-8859-1") as logfile:
-                        for line in first_three_lines:
-                            logfile.write(line)
-                    break
             logger.info(f"lastSetting: {self.lastSetting}.")
             strProd = self.strProduct.get()
             strDefaultPath = self.strFileDir.get()
@@ -1018,42 +1093,118 @@ class Uploader:
                                 cmd = avrdudePath + 'avrdude -C' + avrdudePath + 'avrdude.conf -v -V -patmega328p -carduino -P' + port + ' -b115200 -D -Uflash:w:' + \
                                     filename[s] + ':i'
 
-                            # Run the program and capture output
+                            # Run the program and capture output in real-time
                             # Allow GUI to update display before blocking operation
                             self.win.update_idletasks()
-                            process = subprocess.Popen(cmd,shell = self.shellOption, stdout = subprocess.PIPE, stderr = subprocess.STDOUT)
-                            output, error = process.communicate()  # Wait for the program to finish
-                            # Allow GUI to update display after operation
-                            self.win.update_idletasks()
-                            # printH("error:", error)
-                            # printH("output:", output)
-
-                            # Check for errors (optional)
-                            if error:
-                                logger.info(f"Error running program: {error}")
-                            else:
-                                # Write captured output to a file
-                                with open("./logfile.log", "a+", encoding="ISO-8859-1") as logfile:
-                                    logfile.write(output.decode())  # Decode bytes to string
-                                time.sleep(1)
-
-                                with open("./logfile.log", "r+", encoding="ISO-8859-1") as logfile:
-                                    lines = logfile.readlines()
-                                time.sleep(1)
-
-                                for line in lines:
-                                    line = line.strip()  # remove the line break from each line
-                                    logger.debug(f"{line}")
-                                    if ("programmer is not responding" in line) or \
-                                        ("can\'t open device" in line) or \
-                                        ("attempt" in line) or \
-                                        ("error" in line) or ("Errno" in line):
-                                        status = txt(uploadStage[s]) + txt('failed to upload')
-                                        # self.strStatus.set(status)
-                                        # self.statusBar.update()
-                                        # messagebox.showinfo('Petoi Desktop App',txt('checkLogfile'))
-                                        self.showMessage(status)
-                                        return False
+                            
+                            # Use Popen with PIPE for real-time output
+                            process = subprocess.Popen(cmd, shell=self.shellOption, 
+                                                     stdout=subprocess.PIPE,
+                                                     stderr=subprocess.STDOUT,
+                                                     bufsize=1,
+                                                     universal_newlines=True,
+                                                     encoding='ISO-8859-1')
+                            
+                            # Use thread-based timeout mechanism to avoid blocking
+                            has_error = False
+                            process_timeout = False
+                            timeout_seconds = 30  # 30 seconds timeout (reduced from 120)
+                            last_output_time = [time.time()]  # Use list to allow modification in thread
+                            output_queue = queue.Queue()
+                            reader_finished = [False]
+                            fuse_error_detected = [False]  # Track fuse-related errors
+                            
+                            # Thread function to read output
+                            def read_output():
+                                try:
+                                    while True:
+                                        line = process.stdout.readline()
+                                        if not line:
+                                            break
+                                        output_queue.put(line)
+                                        last_output_time[0] = time.time()
+                                except:
+                                    pass
+                                finally:
+                                    reader_finished[0] = True
+                            
+                            # Start reader thread
+                            reader_thread = threading.Thread(target=read_output, daemon=True)
+                            reader_thread.start()
+                            
+                            # Main loop: process output and monitor timeout
+                            while True:
+                                # Check if we have output to process
+                                try:
+                                    line = output_queue.get(timeout=0.1)
+                                    line = line.strip()
+                                    if line:
+                                        logger.info(line)
+                                        self.processConsoleQueue()
+                                        
+                                        # Check for fuse-related errors that often cause hanging
+                                        if ("lfuse changed" in line.lower()) or \
+                                           ("hfuse changed" in line.lower()) or \
+                                           ("efuse changed" in line.lower()):
+                                            fuse_error_detected[0] = True
+                                            logger.info("Warning: Fuse change detected - may cause hanging")
+                                        
+                                        # Check for error messages
+                                        if ("programmer is not responding" in line) or \
+                                            ("can't open device" in line) or \
+                                            ("attempt" in line) or \
+                                            ("error" in line.lower()) or \
+                                            ("Errno" in line):
+                                            has_error = True
+                                except queue.Empty:
+                                    pass
+                                
+                                # Check if reader thread finished
+                                if reader_finished[0] and output_queue.empty():
+                                    break
+                                
+                                # Check for timeout (shorter timeout if fuse error detected)
+                                current_timeout = 10 if fuse_error_detected[0] else timeout_seconds
+                                if time.time() - last_output_time[0] > current_timeout:
+                                    if fuse_error_detected[0]:
+                                        logger.info(f"Timeout: No output for {current_timeout} seconds after fuse error")
+                                    else:
+                                        logger.info(f"Timeout: No output from avrdude for {current_timeout} seconds")
+                                    process.kill()
+                                    process_timeout = True
+                                    has_error = True
+                                    break
+                                
+                                # Allow GUI to update
+                                self.win.update_idletasks()
+                            
+                            # Wait for process to complete (with timeout)
+                            try:
+                                process.wait(timeout=5)
+                            except subprocess.TimeoutExpired:
+                                process.kill()
+                                process.wait()
+                            
+                            # Wait for reader thread to finish
+                            reader_thread.join(timeout=2)
+                            
+                            # Final console queue processing
+                            self.processConsoleQueue()
+                            
+                            # Check if there were errors
+                            if process_timeout:
+                                status = txt(uploadStage[s]) + txt('failed to upload') + ' (Timeout)'
+                                self.strStatus.set(status)
+                                self.statusBar.update()
+                                logger.info(f"Upload failed: avrdude timeout - possibly wrong port selected")
+                                return False
+                            elif has_error or process.returncode != 0:
+                                status = txt(uploadStage[s]) + txt('failed to upload')
+                                self.strStatus.set(status)
+                                self.statusBar.update()
+                                return False
+                            
+                            time.sleep(0.2)
 
                     # self.inProgress = False
                     except:
@@ -1108,42 +1259,105 @@ class Uploader:
                         ' 0x8000 ' + filename[1] + \
                         ' 0xe000 ' + filename[2] + \
                         ' 0x10000 ' + filename[3]
-                    # Run the program and capture output
+                    # Run the program and capture output in real-time
                     # Allow GUI to update display before blocking operation
                     self.win.update_idletasks()
-                    process = subprocess.Popen(cmd, shell=self.shellOption, stdout=subprocess.PIPE,
-                                            stderr=subprocess.STDOUT)
-                    output, error = process.communicate()  # Wait for the program to finish
-                    # Allow GUI to update display after operation
-                    self.win.update_idletasks()
-                    # printH("error:", error)
-                    # printH("output:", output)
-
-                    # Check for errors (optional)
-                    if error:
-                        logger.info(f"Error running program: {error}")
-                    else:
-                        # Write captured output to a file
-                        with open("./logfile.log", "a+", encoding="ISO-8859-1") as logfile:
-                            logfile.write(output.decode())  # Decode bytes to string
-                        time.sleep(1)
-
-                        with open("./logfile.log", "r+", encoding="ISO-8859-1") as logfile:
-                            lines = logfile.readlines()
-                        time.sleep(1)
-
-                        for line in lines:
-                            line = line.strip()  # remove the line break from each line
-                            logger.debug(f"{line}")
-                            if ("Traceback" in line) or \
-                                ("Failed to connect to ESP32" in line) or \
-                                ("error" in line) or ("Errno" in line):
-                                status = txt('Main function') + txt('failed to upload')
-                                # self.strStatus.set(status)
-                                # self.statusBar.update()
-                                # messagebox.showinfo('Petoi Desktop App', txt('checkLogfile'))
-                                self.showMessage(status)
-                                return False
+                    
+                    # Use Popen with PIPE for real-time output
+                    process = subprocess.Popen(cmd, shell=self.shellOption, 
+                                             stdout=subprocess.PIPE,
+                                             stderr=subprocess.STDOUT,
+                                             bufsize=1,
+                                             universal_newlines=True,
+                                             encoding='ISO-8859-1')
+                    
+                    # Use thread-based timeout mechanism to avoid blocking
+                    has_error = False
+                    process_timeout = False
+                    timeout_seconds = 30  # 30 seconds timeout (reduced from 120)
+                    last_output_time = [time.time()]  # Use list to allow modification in thread
+                    output_queue = queue.Queue()
+                    reader_finished = [False]
+                    
+                    # Thread function to read output
+                    def read_output():
+                        try:
+                            while True:
+                                line = process.stdout.readline()
+                                if not line:
+                                    break
+                                output_queue.put(line)
+                                last_output_time[0] = time.time()
+                        except:
+                            pass
+                        finally:
+                            reader_finished[0] = True
+                    
+                    # Start reader thread
+                    reader_thread = threading.Thread(target=read_output, daemon=True)
+                    reader_thread.start()
+                    
+                    # Main loop: process output and monitor timeout
+                    while True:
+                        # Check if we have output to process
+                        try:
+                            line = output_queue.get(timeout=0.1)
+                            line = line.strip()
+                            if line:
+                                logger.info(line)
+                                self.processConsoleQueue()
+                                
+                                # Check for error messages
+                                if ("Traceback" in line) or \
+                                    ("Failed to connect to ESP32" in line) or \
+                                    ("error" in line.lower()) or \
+                                    ("Errno" in line):
+                                    has_error = True
+                        except queue.Empty:
+                            pass
+                        
+                        # Check if reader thread finished
+                        if reader_finished[0] and output_queue.empty():
+                            break
+                        
+                        # Check for timeout
+                        if time.time() - last_output_time[0] > timeout_seconds:
+                            logger.info(f"Timeout: No output from esptool for {timeout_seconds} seconds")
+                            process.kill()
+                            process_timeout = True
+                            has_error = True
+                            break
+                        
+                        # Allow GUI to update
+                        self.win.update_idletasks()
+                    
+                    # Wait for process to complete (with timeout)
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                    
+                    # Wait for reader thread to finish
+                    reader_thread.join(timeout=2)
+                    
+                    # Final console queue processing
+                    self.processConsoleQueue()
+                    
+                    # Check if there were errors
+                    if process_timeout:
+                        status = txt('Main function') + txt('failed to upload') + ' (Timeout)'
+                        self.strStatus.set(status)
+                        self.statusBar.update()
+                        logger.info(f"Upload failed: esptool timeout - possibly wrong port selected")
+                        return False
+                    elif has_error or process.returncode != 0:
+                        status = txt('Main function') + txt('failed to upload')
+                        self.strStatus.set(status)
+                        self.statusBar.update()
+                        return False
+                    
+                    time.sleep(0.2)
 
                 except Exception as e:
                     printH("Excep:", e)
@@ -1151,7 +1365,7 @@ class Uploader:
                     status = txt('Main function') + txt('failed to upload')
                     # self.strStatus.set(status)
                     # self.statusBar.update()
-                    self.showMessage(status)
+                    # self.showMessage(status)
                     return False
                 else:
                     status = txt('Main function') + txt('is successully uploaded')
@@ -1175,6 +1389,296 @@ class Uploader:
             logger.error(f"Error in autoupload: {e}")
             return False
         
+    def setupConsoleLogging(self):
+        """Set up custom logging handler to redirect logs to Console text widget"""
+        try:
+            # Create a custom handler that also stores logs in memory before GUI is ready
+            console_handler = ConsoleHandler(self.txtConsole, self.logQueue)
+            formatter = logging.Formatter('%(asctime)s %(name)s - %(levelname)s - %(message)s')
+            console_handler.setFormatter(formatter)
+            console_handler.setLevel(logging.INFO)
+            
+            # Only add handler to root logger (will capture all child loggers including ardSerial)
+            root_logger = logging.getLogger()
+            root_logger.addHandler(console_handler)
+            
+            self.console_handler = console_handler
+            
+            # Display any startup logs that were recorded before GUI was ready
+            self.displayStartupLogs()
+        except Exception as e:
+            print(f"Error setting up console logging: {e}")
+    
+    def displayStartupLogs(self):
+        """Display startup logs that were generated before GUI was ready"""
+        try:
+            # Display startup information directly to console
+            import sys
+            import time
+            
+            self.txtConsole.config(state=NORMAL)
+            
+            # Format timestamp
+            current_time = time.strftime('%Y-%m-%d %H:%M:%S')
+            ms = int((time.time() % 1) * 1000)
+            timestamp = f"{current_time},{ms:03d}"
+            
+            # Display startup logs in the same format as logging
+            startup_logs = [
+                f"{timestamp} ardSerial - INFO - ardSerial date: Nov. 27, 2025\n",
+                f"\n",
+                f"{timestamp} ardSerial - INFO - Python version is {sys.version.split()[0].split('.')}\n"
+            ]
+            
+            # Save the first 2 startup log lines for later restoration (after Clear button)
+            self.savedStartupLogs = [
+                f"{timestamp} ardSerial - INFO - ardSerial date: Nov. 27, 2025",
+                f"{timestamp} ardSerial - INFO - Python version is {sys.version.split()[0].split('.')}"
+            ]
+            
+            # Add configuration info if available
+            if hasattr(self, 'configuration') and len(self.configuration) >= 6:
+                startup_logs.append(f"\n")
+                startup_logs.append(f"{timestamp} ardSerial - INFO - {self.configuration}\n")
+            
+            # Add firmware folder info
+            if hasattr(self, 'strFileDir'):
+                startup_logs.append(f"\n")
+                startup_logs.append(f"{timestamp} ardSerial - INFO - The firmware file folder is {self.strFileDir.get()}\n")
+            
+            # Add port information (from initialization)
+            if hasattr(self, 'strPort') and portStrList:
+                startup_logs.append(f"\n")
+                startup_logs.append(f"{timestamp} ardSerial - INFO - Refreshed port list from system: {portStrList}\n")
+                
+                if self.strPort.get():
+                    startup_logs.append(f"\n")
+                    startup_logs.append(f"{timestamp} ardSerial - INFO - Preserved manually selected port: {self.strPort.get()}\n")
+                
+                startup_logs.append(f"\n")
+                startup_logs.append(f"{timestamp} ardSerial - INFO - portStrList is {portStrList}\n")
+            
+            for log in startup_logs:
+                self.txtConsole.insert(END, log)
+            
+            self.txtConsole.see(END)
+            self.txtConsole.config(state=DISABLED)
+            self.txtConsole.update_idletasks()
+        except Exception as e:
+            print(f"Error displaying startup logs: {e}")
+    
+    def prepareConsoleForNewOperation(self):
+        """Prepare console for a new operation"""
+        try:
+            self.txtConsole.config(state=NORMAL)
+            
+            if self.isFirstOperation:
+                # First operation: don't clear, just add a separator
+                self.txtConsole.insert(END, "\n" + "="*80 + "\n")
+                self.txtConsole.insert(END, "=== Starting Firmware Operation ===\n")
+                self.txtConsole.insert(END, "="*80 + "\n\n")
+                self.isFirstOperation = False
+            else:
+                # Subsequent operations: keep only first 2 lines of startup info
+                # (ardSerial date and Python version)
+                content = self.txtConsole.get(1.0, END)
+                lines = content.split('\n')
+                
+                # Find the first 2 startup info lines
+                startup_lines = []
+                found_ardserial = False
+                found_python = False
+                
+                for line in lines:
+                    # Look for ardSerial date line
+                    if 'ardSerial date' in line and not found_ardserial:
+                        startup_lines.append(line)
+                        found_ardserial = True
+                    # Look for Python version line
+                    elif 'Python version' in line and not found_python:
+                        startup_lines.append(line)
+                        found_python = True
+                    
+                    # Stop after finding both
+                    if found_ardserial and found_python:
+                        break
+                
+                # If startup lines not found in console (e.g., after Clear button),
+                # use saved startup logs
+                if not startup_lines and hasattr(self, 'savedStartupLogs'):
+                    startup_lines = self.savedStartupLogs
+                
+                # Clear and restore only the first 2 startup lines
+                self.txtConsole.delete(1.0, END)
+                if startup_lines:
+                    for line in startup_lines:
+                        self.txtConsole.insert(END, line + '\n')
+                    # Add empty line after startup info
+                    self.txtConsole.insert(END, "\n")
+                
+                # Add separator for new operation
+                self.txtConsole.insert(END, "="*80 + "\n")
+                self.txtConsole.insert(END, "=== Starting Firmware Operation ===\n")
+                self.txtConsole.insert(END, "="*80 + "\n\n")
+            
+            self.txtConsole.see(END)
+            self.txtConsole.config(state=DISABLED)
+            
+            # Clear any pending log messages in queue
+            while not self.logQueue.empty():
+                try:
+                    self.logQueue.get_nowait()
+                except queue.Empty:
+                    break
+                    
+            logger.debug("Console prepared for new operation")
+        except Exception as e:
+            print(f"Error preparing console for new operation: {e}")
+    
+    def clearConsole(self):
+        """Clear the console text widget but preserve the first 2 startup log lines"""
+        try:
+            self.txtConsole.config(state=NORMAL)
+            
+            # Get current content
+            content = self.txtConsole.get(1.0, END)
+            lines = content.split('\n')
+            
+            # Find and preserve the first 2 startup log lines
+            startup_lines = []
+            found_ardserial = False
+            found_python = False
+            
+            for line in lines:
+                if 'ardSerial date' in line and not found_ardserial:
+                    startup_lines.append(line)
+                    found_ardserial = True
+                elif 'Python version' in line and not found_python:
+                    startup_lines.append(line)
+                    found_python = True
+                
+                if found_ardserial and found_python:
+                    break
+            
+            # If startup lines not found in console, use saved startup logs
+            if not startup_lines and hasattr(self, 'savedStartupLogs'):
+                startup_lines = self.savedStartupLogs
+            
+            # Clear and restore only the first 2 startup lines
+            self.txtConsole.delete(1.0, END)
+            if startup_lines:
+                for line in startup_lines:
+                    self.txtConsole.insert(END, line + '\n')
+                # Add an empty line for separation
+                self.txtConsole.insert(END, '\n')
+            
+            self.txtConsole.see(END)
+            self.txtConsole.config(state=DISABLED)
+            
+            # Clear queue
+            while not self.logQueue.empty():
+                try:
+                    self.logQueue.get_nowait()
+                except queue.Empty:
+                    break
+        except Exception as e:
+            print(f"Error clearing console: {e}")
+    
+    def copyConsole(self):
+        """Copy all console text to system clipboard"""
+        try:
+            # Get all text from the console
+            console_text = self.txtConsole.get(1.0, END)
+            
+            # Remove trailing newline that Tkinter Text widget adds
+            console_text = console_text.rstrip('\n')
+            
+            # Clear the clipboard
+            self.win.clipboard_clear()
+            
+            # Copy text to clipboard
+            self.win.clipboard_append(console_text)
+            
+            # Update clipboard (required for some systems)
+            self.win.update()
+            
+            # Show a brief message in status bar
+            original_status = self.strStatus.get()
+            self.strStatus.set(txt('Console log copied to clipboard'))
+            self.statusBar.update()
+            
+            # Restore original status after 2 seconds
+            self.win.after(2000, lambda: self.strStatus.set(original_status))
+        except Exception as e:
+            print(f"Error copying console to clipboard: {e}")
+            logger.error(f"Failed to copy console to clipboard: {e}")
+            messagebox.showerror("Copy Error", f"Failed to copy console log to clipboard:\n{e}")
+    
+    def processConsoleQueue(self):
+        """Immediately process all pending messages in the console queue for real-time display"""
+        try:
+            updated = False
+            
+            # Process ALL pending messages immediately
+            while not self.logQueue.empty():
+                try:
+                    msg = self.logQueue.get_nowait()
+                    if msg:
+                        if not updated:
+                            self.txtConsole.config(state=NORMAL)
+                            updated = True
+                        self.txtConsole.insert(END, msg)
+                except queue.Empty:
+                    break
+            
+            if updated:
+                # Auto-scroll to the end
+                self.txtConsole.see(END)
+                # Disable text widget to make it read-only
+                self.txtConsole.config(state=DISABLED)
+                # Force immediate GUI update
+                self.txtConsole.update_idletasks()
+                self.win.update()  # Full update for immediate display
+        except Exception as e:
+            print(f"Error processing console queue: {e}")
+    
+    def updateConsoleFromQueue(self):
+        """Update console text widget with messages from the log queue"""
+        if not self.keepChecking:
+            return
+        
+        try:
+            # Process all pending log messages in the queue (up to 100 at a time to avoid blocking)
+            updated = False
+            count = 0
+            max_batch = 100
+            
+            while not self.logQueue.empty() and count < max_batch:
+                try:
+                    msg = self.logQueue.get_nowait()
+                    if msg:
+                        if not updated:
+                            self.txtConsole.config(state=NORMAL)
+                            updated = True
+                        self.txtConsole.insert(END, msg)
+                        count += 1
+                except queue.Empty:
+                    break
+            
+            if updated:
+                # Auto-scroll to the end
+                self.txtConsole.see(END)
+                # Disable text widget to make it read-only
+                self.txtConsole.config(state=DISABLED)
+                # Force update display immediately for better responsiveness
+                self.txtConsole.update_idletasks()
+        except Exception as e:
+            print(f"Error updating console from queue: {e}")
+        
+        # Schedule next update with shorter interval for better real-time display
+        if self.keepChecking:
+            self.win.after(self.logUpdateInterval, self.updateConsoleFromQueue)
+    
     def force_focus(self):
         self.win.after(1, lambda: self.win.focus_force())
         
@@ -1182,6 +1686,11 @@ class Uploader:
         if messagebox.askokcancel(txt('Quit'), txt('Do you want to quit?')):
             # Stop main-thread timer
             self.keepChecking = False
+            
+            # Remove console handler from root logger
+            if hasattr(self, 'console_handler'):
+                root_logger = logging.getLogger()
+                root_logger.removeHandler(self.console_handler)
             
             self.saveConfigToFile(defaultConfPath)
             logger.info(f"{self.configuration}")
