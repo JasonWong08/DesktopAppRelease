@@ -864,12 +864,19 @@ class Uploader:
                                 elif prompStr.find("assurance") != -1:
                                     serObj.Send_data(self.encode("n"))
                                     continue
+                                # Update status bar before showing message box
+                                # Only show first line in status bar (message box can show full text)
+                                status_message = prompt['message'].split('\n')[0].strip()
+                                self.strStatus.set(status_message)
+                                self.statusBar.update()
                                 retMsg = messagebox.askyesno(txt('Warning'), prompt['message'])
                                 if retMsg:
                                     self.strStatus.set(prompt['operating'])
                                     self.statusBar.update()
                                     serObj.Send_data(self.encode("Y"))
                                 else:
+                                    self.strStatus.set('')
+                                    self.statusBar.update()
                                     serObj.Send_data(self.encode("n"))
                                 progress += 1
                             if prompStr.find("Ready!") != -1:
@@ -889,12 +896,19 @@ class Uploader:
                                 elif prompStr.find("assurance") != -1:
                                     serObj.Send_data(self.encode("n"))
                                     continue
+                                # Update status bar before showing message box
+                                # Only show first line in status bar (message box can show full text)
+                                status_message = prompt['message'].split('\n')[0].strip()
+                                self.strStatus.set(status_message)
+                                self.statusBar.update()
                                 retMsg = messagebox.askyesno(txt('Warning'), prompt['message'])
                                 if retMsg:
                                     self.strStatus.set(prompt['operating'])
                                     self.statusBar.update()
                                     serObj.Send_data(self.encode("Y"))
                                 else:
+                                    self.strStatus.set('')
+                                    self.statusBar.update()
                                     serObj.Send_data(self.encode("n"))
                                 progress += 1
                             else:    # for BiBoard upgrade firmware
@@ -955,10 +969,18 @@ class Uploader:
         self.force_focus()
 
         if self.bIMUerror and strBoardVersion in NyBoard_version_list:
+            # Update status bar before showing message box
+            self.strStatus.set(txt('caliIMUerrorMessage'))
+            self.statusBar.update()
             messagebox.showwarning(txt('Warning'), message=txt('caliIMUerrorMessage'))
             return
 
         if not self.bFacReset and strBoardVersion in NyBoard_version_list:
+            # Update status bar before showing message box
+            # Only show first line in status bar (message box can show full text)
+            status_message = txt('parameterFinish').split('\n')[0].strip()
+            self.strStatus.set(status_message)
+            self.statusBar.update()
             messagebox.showinfo(title=None, message=txt('parameterFinish'))
 
 
@@ -1007,6 +1029,9 @@ class Uploader:
             logger.info(f"currentSetting: {self.currentSetting}.")
 
             if self.strFileDir.get() == '' or self.strFileDir.get() == ' ':
+                # Update status bar before showing message box
+                self.strStatus.set(txt('msgFileDir'))
+                self.statusBar.update()
                 messagebox.showwarning(txt('Warning'), txt('msgFileDir'))
                 self.force_focus()  # force the main interface to get focus
                 return False
@@ -1033,6 +1058,9 @@ class Uploader:
                 port = self.strPort.get()
             logger.info(f"{self.strPort.get()}")
             if port == ' ' or port == '':
+                # Update status bar before showing message box
+                self.strStatus.set(txt('msgPort'))
+                self.statusBar.update()
                 messagebox.showwarning(txt('Warning'), txt('msgPort'))
                 self.force_focus()
                 return False
@@ -1069,6 +1097,9 @@ class Uploader:
                         avrdudePath = '/usr/bin/'
                         path = pathlib.Path(avrdudePath + 'avrdude')
                         if not path.exists():
+                            # Update status bar before showing message box
+                            self.strStatus.set(txt('msgNoneAvrdude'))
+                            self.statusBar.update()
                             messagebox.showwarning(txt('Warning'), txt('msgNoneAvrdude'))
                             self.force_focus()  # force the main interface to get focus
                             return False
@@ -1211,6 +1242,9 @@ class Uploader:
                         status = txt(uploadStage[s]) + txt('failed to upload')
                         self.strStatus.set(status)
                         self.statusBar.update()
+                        # Update status bar before showing message box
+                        self.strStatus.set(txt('Replug prompt'))
+                        self.statusBar.update()
                         messagebox.showwarning(txt('Warning'), txt('Replug prompt'))
                         return False
                     else:
@@ -1243,6 +1277,9 @@ class Uploader:
                     esptoolPath = '/usr/bin/'
                     path = pathlib.Path(esptoolPath + 'esptool')
                     if not path.exists():
+                        # Update status bar before showing message box
+                        self.strStatus.set(txt('msgNoneEsptool'))
+                        self.statusBar.update()
                         messagebox.showwarning(txt('Warning'), txt('msgNoneEsptool'))
                         self.force_focus()  # force the main interface to get focus
                         return False
@@ -1368,11 +1405,19 @@ class Uploader:
                     # self.showMessage(status)
                     return False
                 else:
-                    status = txt('Main function') + txt('is successully uploaded')
+                    # Don't set success status here - let WriteInstinctPrompts handle status updates
+                    # Status will be set after WriteInstinctPrompts completes
+                    pass
                     
-                self.strStatus.set(status)
-                self.statusBar.update()
+                # Call WriteInstinctPrompts first, then set success status if needed
                 self.WriteInstinctPrompts(port)
+                
+                # Set success status after WriteInstinctPrompts completes
+                # Only if no errors occurred (bIMUerror will be set if there's an error)
+                if not self.bIMUerror:
+                    status = txt('Main function') + txt('is successully uploaded')
+                    self.strStatus.set(status)
+                    self.statusBar.update()
 
             self.lastSetting = self.currentSetting
             if self.bFacReset:
@@ -1382,6 +1427,9 @@ class Uploader:
             # for there is no calibrate IMU error
             if not self.bIMUerror:
                 print('Finish!')
+                # Update status bar before showing message box
+                self.strStatus.set(txt('msgFinish'))
+                self.statusBar.update()
                 messagebox.showinfo(title=None, message=txt('msgFinish'))
             self.force_focus()  # force the main interface to get focus
             return True
@@ -1585,34 +1633,34 @@ class Uploader:
             print(f"Error clearing console: {e}")
     
     def copyConsole(self):
-        """Copy all console text to system clipboard"""
+        """Copy selected text or all text from console widget to clipboard"""
         try:
-            # Get all text from the console
-            console_text = self.txtConsole.get(1.0, END)
-            
-            # Remove trailing newline that Tkinter Text widget adds
-            console_text = console_text.rstrip('\n')
-            
-            # Clear the clipboard
-            self.win.clipboard_clear()
-            
-            # Copy text to clipboard
-            self.win.clipboard_append(console_text)
-            
-            # Update clipboard (required for some systems)
-            self.win.update()
-            
-            # Show a brief message in status bar
-            original_status = self.strStatus.get()
-            self.strStatus.set(txt('Console log copied to clipboard'))
-            self.statusBar.update()
-            
-            # Restore original status after 2 seconds
-            self.win.after(2000, lambda: self.strStatus.set(original_status))
+            # Check if there is selected text
+            if self.txtConsole.tag_ranges('sel'):
+                # Get selected text
+                selected_text = self.txtConsole.get('sel.first', 'sel.last')
+                # Copy to clipboard
+                self.win.clipboard_clear()
+                self.win.clipboard_append(selected_text)
+                self.strStatus.set(txt('Copied selected text to clipboard'))
+                self.statusBar.update()
+            else:
+                # No selection, copy all text
+                all_text = self.txtConsole.get('1.0', END)
+                # Remove the last newline that Text widget always adds
+                all_text = all_text.rstrip('\n')
+                if all_text:
+                    self.win.clipboard_clear()
+                    self.win.clipboard_append(all_text)
+                    self.strStatus.set(txt('Copied all output to clipboard'))
+                    self.statusBar.update()
+                else:
+                    self.strStatus.set(txt('No output to copy'))
+                    self.statusBar.update()
         except Exception as e:
-            print(f"Error copying console to clipboard: {e}")
-            logger.error(f"Failed to copy console to clipboard: {e}")
-            messagebox.showerror("Copy Error", f"Failed to copy console log to clipboard:\n{e}")
+            messagebox.showerror(txt('Error'), f'{txt("Error")}: {str(e)}')
+            self.strStatus.set(txt('Failed to copy'))
+            self.statusBar.update()
     
     def processConsoleQueue(self):
         """Immediately process all pending messages in the console queue for real-time display"""
