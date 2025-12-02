@@ -63,10 +63,12 @@ class Debugger:
         self.winDebug.title(txt('Debugger'))
         self.createMenu()
         
-        # Configure main window columns for centering
-        self.winDebug.columnconfigure(0, weight=1)
-        self.winDebug.columnconfigure(1, weight=0)
-        self.winDebug.columnconfigure(2, weight=1)
+        # Configure main window columns for responsive layout
+        # Column 0 and 2 have weight=0 to keep fixed width, column 1 has weight=1 to match window width changes
+        # This ensures text box width changes match window width changes
+        self.winDebug.columnconfigure(0, weight=0)
+        self.winDebug.columnconfigure(1, weight=1, minsize=400)  # Column 1 expands to match window width changes
+        self.winDebug.columnconfigure(2, weight=0)
         
         # Row 0: Model label
         self.modelLabel = Label(self.winDebug, text=displayName(self.configName), font=self.myFont)
@@ -123,9 +125,9 @@ class Debugger:
         # Row 4: Status bar
         fmStatus = ttk.Frame(self.winDebug)
         fmStatus.grid(row=4, column=1, ipadx=2, pady=5, sticky=W + E)
+        fmStatus.columnconfigure(0, weight=1)  # Allow status bar to expand
         self.statusBar = ttk.Label(fmStatus, textvariable=self.strStatus, font=('Arial', 14), relief=SUNKEN)
-        self.statusBar.grid(row=0, ipadx=5, sticky=W + E)
-        fmStatus.columnconfigure(0, weight=1)
+        self.statusBar.grid(row=0, column=0, ipadx=5, sticky=W + E)
         
         # Row 5-7: Main terminal frame (contains input, output, and controls)
         fmSerialMonitor = ttk.Frame(self.winDebug)
@@ -149,16 +151,29 @@ class Debugger:
         fmOutput = ttk.Frame(fmSerialMonitor)
         fmOutput.grid(row=1, column=0, pady=(0, 5), sticky=W + E + N + S)
         
-        # Text widget with scrollbar
-        scrollbar = Scrollbar(fmOutput)
-        scrollbar.grid(row=0, column=1, sticky=N + S)
+        # Text widget with vertical and horizontal scrollbars
+        vScrollbar = Scrollbar(fmOutput, orient=VERTICAL)
+        vScrollbar.grid(row=0, column=1, sticky=N + S)
         
-        # Use tabstops to ensure proper alignment (every 1.2cm)
-        tabstops = tuple([f'{i * 1.2}c' for i in range(1, 50)])  # Create 50 tab stops
+        hScrollbar = Scrollbar(fmOutput, orient=HORIZONTAL)
+        hScrollbar.grid(row=1, column=0, sticky=W + E)
+        
+        # Use tabstops with character units for precise column alignment
+        # Set tab stops every 3 characters to accommodate varying field widths:
+        # - First row: 1-2 char numbers (0, 1, 10, 11, etc.)
+        # - Second row: 2-3 char numbers with commas (3,, 0,, -3,, etc.)
+        # With 3-char tab stops, all fields align properly regardless of width
+        # Each field + tab will jump to the next 3-char tab stop, ensuring column alignment
+        # Character units ensure consistent alignment in monospace font
+        # This spacing ensures uniform spacing between all numbers
+        tabstops = tuple([f'{i * 2}c' for i in range(1, 50)])  # Create 50 tab stops, 2 chars apart
+        # Set wrap='none' to disable automatic word wrapping and show horizontal scrollbar
         self.outputText = Text(fmOutput, height=15, width=90, font=('Courier New', 10),
-                              yscrollcommand=scrollbar.set, wrap=WORD, tabs=tabstops)
+                              yscrollcommand=vScrollbar.set, xscrollcommand=hScrollbar.set,
+                              wrap='none', tabs=tabstops)
         self.outputText.grid(row=0, column=0, sticky=W + E + N + S)
-        scrollbar.config(command=self.outputText.yview)
+        vScrollbar.config(command=self.outputText.yview)
+        hScrollbar.config(command=self.outputText.xview)
         
         fmOutput.columnconfigure(0, weight=1)
         fmOutput.rowconfigure(0, weight=1)
@@ -166,6 +181,7 @@ class Debugger:
         # Control buttons frame
         fmControls = ttk.Frame(fmSerialMonitor)
         fmControls.grid(row=2, column=0, sticky=W + E)
+        fmControls.columnconfigure(2, weight=1)  # Allow middle column to expand, pushing buttons to right
         
         # Left side: checkboxes
         self.autoscrollCheck = Checkbutton(fmControls, text=txt('Autoscroll'), 
@@ -179,20 +195,18 @@ class Debugger:
         # Right side: copy and clear buttons
         self.copyBtn = Button(fmControls, text=txt('Copy'), font=self.normalFont, width=12,
                              command=self.copyOutput)
-        self.copyBtn.grid(row=0, column=2, padx=(0, 5), sticky=E)
+        self.copyBtn.grid(row=0, column=3, padx=(0, 5), sticky=E)
         
         self.clearBtn = Button(fmControls, text=txt('Clear output'), font=self.normalFont, width=12,
                               command=self.clearOutput)
-        self.clearBtn.grid(row=0, column=3, sticky=E)
-        
-        fmControls.columnconfigure(1, weight=1)
+        self.clearBtn.grid(row=0, column=4, sticky=E)
         
         # Configure terminal frame to expand
-        fmSerialMonitor.columnconfigure(0, weight=1)
-        fmSerialMonitor.rowconfigure(1, weight=1)
+        fmSerialMonitor.columnconfigure(0, weight=1)  # Allow column 0 to expand horizontally
+        fmSerialMonitor.rowconfigure(1, weight=1)  # Allow row 1 (output text) to expand vertically
         
         # Set row weights to enable expandable space
-        self.winDebug.rowconfigure(5, weight=1)
+        self.winDebug.rowconfigure(5, weight=1)  # Allow row 5 (serial monitor) to expand vertically
 
         self.debuggerReady = True
         
@@ -647,13 +661,39 @@ class Debugger:
         """Display message in output text widget"""
         if self.showTimestamp.get():
             timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
-            # Add timestamp on a separate line to preserve tab alignment in data
-            self.outputText.insert(END, f"[{timestamp}]\n")
-            if self.autoscroll.get():
-                self.outputText.see(END)
-        
-        # Thread-safe update to text widget
-        self.outputText.insert(END, message + '\n')
+            # For sent commands (starting with ">> "), don't use " -> " separator
+            if message.startswith(">> "):
+                self.outputText.insert(END, f"[{timestamp}] {message}\n")
+            else:
+                # Normalize all field widths to ensure uniform spacing
+                # Process all fields to ensure consistent width (2 chars) for uniform spacing
+                # All fields are padded to exactly 2 chars to ensure uniform spacing
+                if '\t' in message:
+                    fields = message.split('\t')
+                    normalized_fields = []
+                    for field in fields:
+                        field = field.strip()  # Remove any leading/trailing whitespace
+                        field_len = len(field)
+                        # Always pad to exactly 2 chars for uniform spacing
+                        # This ensures all fields have the same width and consistent spacing
+                        if field_len <= 2:
+                            normalized_fields.append(f"{field:<2}")
+                        else:
+                            # For fields longer than 2 chars, pad to next multiple of 2
+                            # This ensures uniform spacing while preserving content
+                            target_width = ((field_len + 1) // 2) * 2
+                            normalized_fields.append(f"{field:<{target_width}}")
+                    normalized_message = '\t'.join(normalized_fields)
+                    # Add tab after "-> " to ensure first field starts from a tab stop
+                    # Then add another tab before the first field to ensure consistent spacing
+                    # This ensures uniform spacing from the very first field
+                    self.outputText.insert(END, f"[{timestamp}] -> \t\t{normalized_message}\n")
+                else:
+                    # No tabs in message, use as is
+                    self.outputText.insert(END, f"[{timestamp}] -> {message}\n")
+        else:
+            # Thread-safe update to text widget
+            self.outputText.insert(END, message + '\n')
         
         if self.autoscroll.get():
             self.outputText.see(END)
