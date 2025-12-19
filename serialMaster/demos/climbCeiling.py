@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# -*- coding: UTF-8 -*-
+# -*- coding: utf-8 -*-
 # autopep8 -i
 
 # A complex skill to make Bittle climb up a steel ceiling with meganets on its feet.

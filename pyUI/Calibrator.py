@@ -1,6 +1,6 @@
 #!/usr/bin/python3
-# -*- coding: UTF-8 -*-
-from commonVar import *
+# -*- coding: utf-8 -*-
+from PetoiRobot import *
 
 language = languageList['English']
 
@@ -79,8 +79,7 @@ class Calibrator:
         self.calibratorReady = False
         global language
         language = lan
-#        global goodPorts
-        connectPort(goodPorts)
+        smartConnectPorts()
         start = time.time()
         while config.model_ == '':
             if time.time() - start > 5:

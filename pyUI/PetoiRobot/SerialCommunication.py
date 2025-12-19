@@ -1,5 +1,7 @@
-#!/usr/bin/python3
 # -*- coding: utf-8 -*-
+
+# MindPlus
+# Python
 
 # modified from https://blog.csdn.net/u013541325/article/details/113062191
 
@@ -75,7 +77,7 @@ class Communication(object):
         close serial port
         """
         global Ret
-        # print(self.main_engine.is_open)  # check if the serial port is open
+        # print("self.main_engine.is_open：" + str(self.main_engine.is_open))  # check if the serial port is open
         # determine whether to open
         if self.main_engine.is_open:
             self.main_engine.close()  # close serial port

@@ -1,14 +1,14 @@
 #!/usr/bin/python3
-# -*- coding: UTF-8 -*-
+# -*- coding: utf-8 -*-
 
 # Junfeng Wang
 # Petoi LLC
 # Jun. 26th, 2024
 
-
-from commonVar import *
 from tkinter import ttk
-from datetime import datetime
+import tkinter.font as tkFont
+from PetoiRobot import *
+
 
 language = languageList['English']
 
@@ -19,14 +19,44 @@ class Debugger:
     def __init__(self,model,lan):
         global language
         language = lan
-#        global goodPorts
-        connectPort(goodPorts)
+        smartConnectPorts()
         start = time.time()
         while config.model_ == '':
             if time.time() - start > 5:
                 config.model_ = model    # If can not get the model name, use the model set in the UI interface.
             time.sleep(0.01)
         self.configName = config.model_
+        
+        # Load configuration from file
+        try:
+            with open(defaultConfPath, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            lines = [line.split('\n')[0] for line in lines]  # remove the '\n' at the end of each line
+            self.defaultLan = lines[0]
+            self.defaultPath = lines[2]
+            self.defaultSwVer = lines[3]
+            self.defaultBdVer = lines[4]
+            self.defaultMode = lines[5]
+            if len(lines) >= 8:
+                self.defaultCreator = lines[6]
+                self.defaultLocation = lines[7]
+            else:
+                self.defaultCreator = txt('Nature')
+                self.defaultLocation = txt('Earth')
+            
+            self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
+                                  self.defaultMode, self.defaultCreator, self.defaultLocation]
+        except Exception as e:
+            print('Create configuration file')
+            self.defaultLan = 'English'
+            self.defaultPath = releasePath[:-1]
+            self.defaultSwVer = '2.0'
+            self.defaultBdVer = NyBoard_version
+            self.defaultMode = 'Standard'
+            self.defaultCreator = txt('Nature')
+            self.defaultLocation = txt('Earth')
+            self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
+                                  self.defaultMode, self.defaultCreator, self.defaultLocation]
 
         self.winDebug = Tk()
         self.debuggerReady = False
@@ -41,6 +71,8 @@ class Debugger:
         self.stopReceiveThread = False
         self.autoscroll = BooleanVar(value=True)
         self.showTimestamp = BooleanVar(value=False)
+        self.portCheckingThread = None
+        self.stopPortChecking = False
 
         self.OSname = self.winDebug.call('tk', 'windowingsystem')
         if self.OSname == 'win32':
@@ -110,6 +142,8 @@ class Debugger:
         self.portCombo = ttk.Combobox(self.fmSerial, values=self.availablePorts, state='readonly', 
                                       font=self.normalFont)
         self.portCombo.pack(side=LEFT, fill=X, expand=True, padx=(0, 2))
+        # Bind selection change event
+        self.portCombo.bind('<<ComboboxSelected>>', self.onPortSelectionChanged)
         if len(goodPorts) > 0:
             # Set default to first connected port
             firstPort = list(goodPorts.values())[0]
@@ -168,7 +202,7 @@ class Debugger:
         # This spacing ensures uniform spacing between all numbers
         tabstops = tuple([f'{i * 2}c' for i in range(1, 50)])  # Create 50 tab stops, 2 chars apart
         # Set wrap='none' to disable automatic word wrapping and show horizontal scrollbar
-        self.outputText = Text(fmOutput, height=15, width=90, font=('Courier New', 10),
+        self.outputText = Text(fmOutput, height=15, width=90, font=('Courier New', 16),
                               yscrollcommand=vScrollbar.set, xscrollcommand=hScrollbar.set,
                               wrap='none', tabs=tabstops)
         self.outputText.grid(row=0, column=0, sticky=W + E + N + S)
@@ -214,6 +248,9 @@ class Debugger:
         if self.isConnected:
             self.startReceiveThread()
         
+        # Start port checking thread
+        self.startPortCheckingThread()
+        
         self.winDebug.protocol('WM_DELETE_WINDOW', self.on_closing)
         self.winDebug.update()
         
@@ -246,7 +283,11 @@ class Debugger:
 
 
     def changeModel(self, modelName):
-        self.modelLabel.configure(text=modelName)
+        if self.debuggerReady and modelName != self.configName:
+            self.configName = modelName
+            self.modelLabel.configure(text=modelName)
+            # Save configuration
+            self.saveConfig(defaultConfPath)
         
     
     def changeLan(self, l):
@@ -256,6 +297,7 @@ class Debugger:
             currentStatus = self.strStatus.get()
             
             language = copy.deepcopy(languageList[l])
+            self.defaultLan = l
             self.menubar.destroy()
             self.createMenu()
             self.winDebug.title(txt('Debugger'))
@@ -277,6 +319,9 @@ class Debugger:
             # Re-translate status bar text if it matches known translation keys
             if currentStatus and currentStatus.strip():
                 self._retranslateStatusBar(currentStatus)
+            
+            # Save configuration
+            self.saveConfig(defaultConfPath)
     
     def _retranslateStatusBar(self, currentStatus):
         """Re-translate status bar text when language changes"""
@@ -526,13 +571,13 @@ class Debugger:
                     # Show a message according to the calibration results.
                     if calibration_success:
                         txtResult = txt('IMU Calibration successfully')
-                        messagebox.showinfo('Petoi Desktop App', txtResult)
                     else:
                         txtResult = txt('IMU Calibration failed')
-                        messagebox.showinfo('Petoi Desktop App', txtResult)
 
+                    # Update status bar first, then show messagebox
                     self.strStatus.set(txtResult)
                     self.statusBar.update()
+                    messagebox.showinfo('Petoi Desktop App', txtResult)
                 else:
                     self.strStatus.set(' ')
                     self.statusBar.update()
@@ -552,6 +597,41 @@ class Debugger:
         """Update the list of available serial ports"""
         allPorts = Communication.Print_Used_Com()
         self.availablePorts = [p.split('/')[-1] for p in allPorts]
+    
+    def onPortSelectionChanged(self, event=None):
+        """Handle port selection change in combobox"""
+        if not self.debuggerReady:
+            return
+        
+        selectedPortName = self.portCombo.get()
+        if not selectedPortName:
+            return
+        
+        # Check if currently connected and selected port is different from connected port
+        if self.isConnected and self.currentPort:
+            # Get the port name of currently connected port
+            currentPortName = None
+            # First try to get from goodPorts dictionary
+            if self.currentPort in goodPorts:
+                currentPortName = goodPorts[self.currentPort]
+            else:
+                # Try to find port name by matching serial object
+                for serialObj, portName in goodPorts.items():
+                    if serialObj == self.currentPort:
+                        currentPortName = portName
+                        break
+            
+            # If we couldn't find the port name, check if currentPort is still valid
+            # If selected port is different from connected port, disconnect
+            if currentPortName:
+                if selectedPortName != currentPortName:
+                    # Selected different port, disconnect current connection
+                    # Pass the current port name to show correct status message
+                    self.disconnectPort(portName=currentPortName)
+            else:
+                # Current port not found in goodPorts, disconnect anyway
+                # This handles edge cases where port might have been disconnected externally
+                self.disconnectPort()
         
     def toggleConnection(self):
         """Toggle serial port connection"""
@@ -563,51 +643,122 @@ class Debugger:
             self.connectSerialPort()
     
     def connectSerialPort(self):
-        """Connect to selected serial port"""
+        """Connect to selected serial port using testPort()"""
         portName = self.portCombo.get()
         if not portName:
             messagebox.showwarning(txt('Warning'), txt('Please select a serial port'))
             return
         
-        try:
-            # Find full port path
-            allPorts = Communication.Print_Used_Com()
-            fullPath = None
-            for p in allPorts:
-                if p.split('/')[-1] == portName or p == portName:
-                    fullPath = p
-                    break
-            
-            if fullPath is None:
-                fullPath = portName
-            
-            # Create serial connection
-            serialObj = Communication(fullPath, 115200, 1)
-            if serialObj.main_engine and serialObj.main_engine.is_open:
-                self.currentPort = serialObj
-                self.isConnected = True
+        # Disable button during connection attempt
+        self.connectBtn.config(state='disabled')
+        self.strStatus.set(f'{txt("Testing port")} {portName}...')
+        
+        def testPortInThread():
+            """Test port in background thread"""
+            serialObj = None
+            try:
+                # Find full port path
+                allPorts = Communication.Print_Used_Com()
+                fullPath = None
+                for p in allPorts:
+                    if p.split('/')[-1] == portName or p == portName:
+                        fullPath = p
+                        break
                 
-                # Update button state
-                self.connectBtn.config(text=txt('Connected'), fg='green', relief=SUNKEN)
-                self.strStatus.set(f'{txt("Connected to")} {portName}')
+                if fullPath is None:
+                    fullPath = portName
                 
-                # Start receive thread
-                self.startReceiveThread()
+                # Create serial connection
+                serialObj = Communication(fullPath, 115200, 1)
                 
-                # Add to goodPorts if not already there
-                if serialObj not in goodPorts:
-                    goodPorts[serialObj] = portName
-            else:
-                raise Exception(txt('Failed to open port'))
+                if not serialObj.main_engine or not serialObj.main_engine.is_open:
+                    raise Exception("Failed to open port")
                 
-        except Exception as e:
-            messagebox.showerror(txt('Error'), f'{txt("* Port ")}{portName}{txt(" cannot be opened")}: {str(e)}')
-            self.strStatus.set(f'{txt("Failed to open port")}: {portName}')
+                # Store serialObj reference before calling testPort
+                # testPort will add it to goodPorts if successful
+                serialObjBeforeTest = serialObj
+                
+                # Call testPort to test if it's a Petoi device
+                # testPort will add serialObj to goodPorts if successful
+                # If not a Petoi device, testPort will close the port but not raise exception
+                # If exception occurs, it means port cannot be opened
+                testPort(goodPorts, serialObj, portName)
+                
+                # Check if port was added to goodPorts (success)
+                if serialObjBeforeTest in goodPorts:
+                    # Successfully connected to Petoi device
+                    # Use default parameter to capture variable values in closure
+                    self.winDebug.after(0, lambda obj=serialObjBeforeTest, name=portName: self.onPortConnected(obj, name))
+                else:
+                    # Port was tested but not added (not a Petoi device)
+                    # testPort already closed the port, so we don't need to close it again
+                    # Use default parameter to capture variable value in closure
+                    self.winDebug.after(0, lambda name=portName: self.onPortNotPetoiDevice(name))
+                    
+            except Exception as e:
+                # Exception occurred (port cannot be opened)
+                # Make sure to close the port if it was opened
+                if serialObj and serialObj.main_engine and serialObj.main_engine.is_open:
+                    try:
+                        serialObj.Close_Engine()
+                    except:
+                        pass
+                # Use default parameter to capture variable values in closure
+                # This prevents "free variable referenced before assignment" error
+                errorMsg = str(e)
+                self.winDebug.after(0, lambda name=portName, msg=errorMsg: self.onPortOpenFailed(name, msg))
+        
+        # Run testPort in background thread
+        testThread = threading.Thread(target=testPortInThread, daemon=True)
+        testThread.start()
     
-    def disconnectPort(self):
+    def onPortConnected(self, serialObj, portName):
+        """Handle successful port connection"""
+        # Stop any existing receive thread
+        if self.receiveThread and self.receiveThread.is_alive():
+            self.stopReceiveThread = True
+            self.receiveThread.join(timeout=0.5)
+        
+        self.currentPort = serialObj
+        self.isConnected = True
+        
+        # Update button state
+        self.connectBtn.config(text=txt('Connected'), fg='green', relief=SUNKEN, state='normal')
+        # Format: "已连接到+串口设备名称" (without space)
+        connectedText = txt("Connected to")
+        self.strStatus.set(f'{connectedText}{portName}')
+        
+        # Start receive thread
+        self.startReceiveThread()
+    
+    def onPortNotPetoiDevice(self, portName):
+        """Handle case when port is not a Petoi device"""
+        self.connectBtn.config(text=txt('Connect'), fg='red', relief=RAISED, state='normal')
+        # Use translation with portName placeholder
+        statusText = txt('Port is not connected to a Petoi device')
+        self.strStatus.set(statusText.format(portName=portName))
+    
+    def onPortOpenFailed(self, portName, errorMsg):
+        """Handle case when port cannot be opened"""
+        self.connectBtn.config(text=txt('Connect'), fg='red', relief=RAISED, state='normal')
+        # Use translation with portName placeholder
+        statusText = txt('Port cannot be opened')
+        self.strStatus.set(statusText.format(portName=portName))
+    
+    def disconnectPort(self, portName=None):
         """Disconnect from current serial port"""
         if self.currentPort:
             try:
+                # Get port name before disconnecting
+                disconnectedPortName = portName
+                if not disconnectedPortName:
+                    # Try to get port name from goodPorts
+                    if self.currentPort in goodPorts:
+                        disconnectedPortName = goodPorts[self.currentPort]
+                    else:
+                        # Fallback to current combobox selection
+                        disconnectedPortName = self.portCombo.get()
+                
                 # Stop receive thread
                 self.stopReceiveThread = True
                 if self.receiveThread and self.receiveThread.is_alive():
@@ -621,13 +772,15 @@ class Debugger:
                 if self.currentPort in goodPorts:
                     del goodPorts[self.currentPort]
                 
-                portName = self.portCombo.get()
                 self.currentPort = None
                 self.isConnected = False
                 
                 # Update button state
                 self.connectBtn.config(text=txt('Connect'), fg='red', relief=RAISED)
-                self.strStatus.set(f'{txt("Disconnected from")} {portName}')
+                if disconnectedPortName:
+                    # Format: "已断开+串口设备名称" (without space)
+                    disconnectedText = txt("Disconnected from")
+                    self.strStatus.set(f'{disconnectedText}{disconnectedPortName}')
                 
             except Exception as e:
                 messagebox.showerror(txt('Error'), f'{txt("Error")}: {str(e)}')
@@ -657,43 +810,67 @@ class Debugger:
                     logger.error(f"Error receiving serial data: {e}")
                 break
     
+    def normalizeTabFields(self, message):
+        """Normalize tab-separated fields for consistent alignment
+        Returns normalized message string with aligned fields, or None if no tabs found
+        """
+        if '\t' not in message:
+            return None
+        
+        fields = message.split('\t')
+        normalized_fields = []
+        # Use fixed width for number part to ensure digit alignment
+        # CRITICAL: Numbers should align by their last digit, not by comma
+        # All fields use TOTAL_WIDTH = 5 characters for consistent column alignment
+        # Fields without comma: number right-aligned to 4 chars + 1 space = 5 chars total
+        # Fields with comma: number right-aligned to 4 chars + 1 comma = 5 chars total
+        NUMBER_WIDTH = 4  # Width for number part (right-aligned)
+        for field in fields:
+            field = field.strip()
+            # Check if field ends with comma
+            if field.endswith(','):
+                # Separate number part and comma
+                number_part = field[:-1]  # Remove trailing comma
+                # Right-align the number part, then append comma
+                # This ensures the last digit aligns with numbers above, comma follows
+                normalized_field = f"{number_part:>{NUMBER_WIDTH}},"
+            else:
+                # No comma, right-align number to NUMBER_WIDTH, then add space to match TOTAL_FIELD_WIDTH
+                # This ensures consistent column width and digit alignment
+                normalized_field = f"{field:>{NUMBER_WIDTH}} "
+            normalized_fields.append(normalized_field)
+        
+        # Use fixed spacing (2 spaces) between fields for consistent spacing
+        field_separator = ' ' * 2
+        return field_separator.join(normalized_fields)
+    
     def displayOutput(self, message):
         """Display message in output text widget"""
         if self.showTimestamp.get():
-            timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+            timestamp = datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]
             # For sent commands (starting with ">> "), don't use " -> " separator
             if message.startswith(">> "):
                 self.outputText.insert(END, f"[{timestamp}] {message}\n")
             else:
-                # Normalize all field widths to ensure uniform spacing
-                # Process all fields to ensure consistent width (2 chars) for uniform spacing
-                # All fields are padded to exactly 2 chars to ensure uniform spacing
-                if '\t' in message:
-                    fields = message.split('\t')
-                    normalized_fields = []
-                    for field in fields:
-                        field = field.strip()  # Remove any leading/trailing whitespace
-                        field_len = len(field)
-                        # Always pad to exactly 2 chars for uniform spacing
-                        # This ensures all fields have the same width and consistent spacing
-                        if field_len <= 2:
-                            normalized_fields.append(f"{field:<2}")
-                        else:
-                            # For fields longer than 2 chars, pad to next multiple of 2
-                            # This ensures uniform spacing while preserving content
-                            target_width = ((field_len + 1) // 2) * 2
-                            normalized_fields.append(f"{field:<{target_width}}")
-                    normalized_message = '\t'.join(normalized_fields)
-                    # Add tab after "-> " to ensure first field starts from a tab stop
-                    # Then add another tab before the first field to ensure consistent spacing
-                    # This ensures uniform spacing from the very first field
-                    self.outputText.insert(END, f"[{timestamp}] -> \t\t{normalized_message}\n")
+                # Normalize tab-separated fields for consistent alignment
+                normalized_message = self.normalizeTabFields(message)
+                if normalized_message is not None:
+                    # Use normalized message with aligned fields
+                    timestamp_prefix = f"[{timestamp}] -> "
+                    initial_spacing = ' ' * 2  # 2 spaces after timestamp prefix (same as field spacing)
+                    self.outputText.insert(END, f"{timestamp_prefix}{initial_spacing}{normalized_message}\n")
                 else:
                     # No tabs in message, use as is
                     self.outputText.insert(END, f"[{timestamp}] -> {message}\n")
         else:
-            # Thread-safe update to text widget
-            self.outputText.insert(END, message + '\n')
+            # Apply same field alignment logic when timestamp is disabled
+            normalized_message = self.normalizeTabFields(message)
+            if normalized_message is not None:
+                # Use normalized message with aligned fields
+                self.outputText.insert(END, normalized_message + '\n')
+            else:
+                # No tabs in message, use as is
+                self.outputText.insert(END, message + '\n')
         
         if self.autoscroll.get():
             self.outputText.see(END)
@@ -758,12 +935,118 @@ class Debugger:
         self.outputText.delete('1.0', END)
         self.strStatus.set(txt('Output cleared'))
 
+    def saveConfig(self, filename):
+        """Save configuration to file"""
+        self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
+                              self.defaultMode, self.configuration[6], self.configuration[7]]
+        saveConfigToFile(self.configuration, filename)
+    
+    def checkPortStatus(self):
+        """Check current selected port status and update UI accordingly"""
+        if not self.debuggerReady:
+            return
+        
+        selectedPortName = self.portCombo.get()
+        if not selectedPortName:
+            return
+        
+        # Check if the selected port is in goodPorts
+        portFound = False
+        matchingSerialObj = None
+        
+        for serialObj, portName in goodPorts.items():
+            if portName == selectedPortName:
+                portFound = True
+                matchingSerialObj = serialObj
+                break
+        
+        if portFound:
+            # Port is available and connected
+            # Check if we need to update the connection state
+            if self.currentPort != matchingSerialObj or not self.isConnected:
+                # Update to use the matching port
+                wasConnected = self.isConnected
+                self.isConnected = True
+                self.currentPort = matchingSerialObj
+                
+                # Update button to show connected state
+                self.connectBtn.config(text=txt('Connected'), fg='green', relief=SUNKEN)
+                # Format: "已连接到+串口设备名称" (without space)
+                connectedText = txt("Connected to")
+                self.strStatus.set(f'{connectedText}{selectedPortName}')
+                
+                # Start receive thread if not already running
+                if not wasConnected or not self.receiveThread or not self.receiveThread.is_alive():
+                    if wasConnected:
+                        # Stop old thread first
+                        self.stopReceiveThread = True
+                        if self.receiveThread and self.receiveThread.is_alive():
+                            self.receiveThread.join(timeout=0.5)
+                    self.startReceiveThread()
+        else:
+            # Port is disconnected or not available
+            # Check if we need to disconnect (if currently connected to this port)
+            shouldDisconnect = False
+            if self.isConnected and self.currentPort:
+                # Check if currentPort corresponds to the selected port name
+                currentPortName = None
+                if self.currentPort in goodPorts:
+                    currentPortName = goodPorts[self.currentPort]
+                # If currentPort is not in goodPorts or doesn't match selected port, disconnect
+                if self.currentPort not in goodPorts or currentPortName != selectedPortName:
+                    shouldDisconnect = True
+            
+            if shouldDisconnect:
+                self.isConnected = False
+                # Stop receive thread
+                self.stopReceiveThread = True
+                if self.receiveThread and self.receiveThread.is_alive():
+                    self.receiveThread.join(timeout=0.5)
+                self.currentPort = None
+                self.connectBtn.config(text=txt('Connect'), fg='red', relief=RAISED)
+                # Format: "已断开+串口设备名称" (without space)
+                disconnectedText = txt("Disconnected from")
+                self.strStatus.set(f'{disconnectedText}{selectedPortName}')
+            elif not self.isConnected:
+                # Already disconnected, just update status if needed
+                currentStatus = self.strStatus.get()
+                disconnectedText = txt("Disconnected from")
+                expectedStatus = f'{disconnectedText}{selectedPortName}'
+                if currentStatus != expectedStatus:
+                    self.connectBtn.config(text=txt('Connect'), fg='red', relief=RAISED)
+                    self.strStatus.set(expectedStatus)
+    
+    def startPortCheckingThread(self):
+        """Start thread to check port status using keepCheckingPort"""
+        def updateCallback():
+            """Callback function called by keepCheckingPort when port status changes"""
+            # Use after() to safely update UI from background thread
+            self.winDebug.after(0, self.checkPortStatus)
+        
+        def portCheckingWrapper():
+            """Wrapper to run keepCheckingPort with proper condition"""
+            # Create condition that checks if we should continue checking
+            cond = lambda: not self.stopPortChecking
+            try:
+                keepCheckingPort(goodPorts, cond1=cond, check=True, updateFunc=updateCallback)
+            except Exception as e:
+                logger.error(f"Error in port checking thread: {e}")
+        
+        self.stopPortChecking = False
+        self.portCheckingThread = threading.Thread(target=portCheckingWrapper, daemon=True)
+        self.portCheckingThread.start()
+    
     def on_closing(self):
         if messagebox.askokcancel(txt('Quit'), txt('Do you want to quit?')):
+            # Save configuration before closing
+            self.saveConfig(defaultConfPath)
             self.debuggerReady = False
             self.stopReceiveThread = True
+            self.stopPortChecking = True
             if self.receiveThread and self.receiveThread.is_alive():
                 self.receiveThread.join(timeout=1)
+            if self.portCheckingThread and self.portCheckingThread.is_alive():
+                self.portCheckingThread.join(timeout=1)
             self.winDebug.destroy()
             closeAllSerial(goodPorts)
             os._exit(0)

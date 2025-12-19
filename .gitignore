@@ -207,3 +207,9 @@ marimo/_lsp/
 __marimo__/
 
 .idea/
+pyUI/genApp4Mac/*
+pyUI/genApp4Win/*
+pyUI/lib/*
+pyUI/README_Mac.txt
+pyUI/README_Windows.txt
+pyUI/PetoiDesktopApp/*

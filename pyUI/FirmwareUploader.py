@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-# -*- coding: UTF-8 -*-
+# -*- coding: utf-8 -*-
 
 # !/usr/bin/python3
 
@@ -7,8 +7,6 @@
 # Petoi LLC
 # May.1st, 2022
 
-from commonVar import *
-# from subprocess import check_call
 import subprocess
 from tkinter import ttk
 from tkinter import filedialog
@@ -16,9 +14,9 @@ from tkinter.scrolledtext import ScrolledText
 import pathlib
 import logging
 import queue
-import threading
 import time
 # import webbrowser
+from PetoiRobot import *
 
 regularW = 14
 language = languageList['English']
@@ -46,7 +44,6 @@ class ConsoleHandler(logging.Handler):
 class Uploader:
     def __init__(self,model,lan):
         connectPort(goodPorts, needTesting=False, needSendTask=False, needOpenPort=False)
-        # closeAllSerial(goodPorts, clearPorts=False)
         self.configName = model
         self.win = Tk()
         self.OSname = self.win.call('tk', 'windowingsystem')
@@ -59,12 +56,26 @@ class Uploader:
 
         if self.OSname == 'win32':
             self.shellOption = False
-        self.win.resizable(False, False)
+        self.win.resizable(True, True)  # Allow window resizing
         self.bParaUpload = True
         self.bFacReset = False
         self.bIMUerror = False
-        Grid.rowconfigure(self.win, 0, weight=1)
+        self.portWasManuallySelected = False  # Flag to track if port was manually selected
+        self.validPort = ""
+        self.uploadSuccess = False
+        # Configure window grid to allow resizing
+        # Row 0: File directory (fixed height)
+        # Row 1: Controls container (fixed height, centered)
+        # Row 2: Status bar (fixed height)
+        # Row 3: Console (expandable)
+        Grid.rowconfigure(self.win, 0, weight=0)  # File directory - fixed height
+        Grid.rowconfigure(self.win, 1, weight=0)  # Controls - fixed height
+        Grid.rowconfigure(self.win, 2, weight=0)  # Status bar - fixed height
+        Grid.rowconfigure(self.win, 3, weight=1)  # Console - expandable
+        # Configure columns to allow horizontal resizing
         Grid.columnconfigure(self.win, 0, weight=1)
+        Grid.columnconfigure(self.win, 1, weight=1)
+        Grid.columnconfigure(self.win, 2, weight=1)
         self.strProduct = StringVar()
         global language
         language = lan
@@ -96,6 +107,9 @@ class Uploader:
         self.cbBoardVersion['values'] = board_version_list
         self.updateMode()
         self.setActiveOption()
+        if self.OSname == 'aqua':
+            # For macOS, update port list and it will handle selection
+            self.updatePort()
 
         self.win.protocol('WM_DELETE_WINDOW', self.on_closing)
         self.win.update()
@@ -106,7 +120,7 @@ class Uploader:
         
         # Initialize lastPortList from actual system ports to avoid false "new port" detection
         try:
-            from SerialCommunication import Communication
+            # Communication is already imported via "from PetoiRobot import *"
             currentPorts = Communication.Print_Used_Com()
             self.lastPortList = [p.split('/')[-1] for p in currentPorts]
         except:
@@ -201,8 +215,21 @@ class Uploader:
         fmFileDir.columnconfigure(1, weight=1)  # set column width
         fmFileDir.rowconfigure(1, weight=1)
 
-        fmProduct = ttk.Frame(self.win)
-        fmProduct.grid(row=1, column=0, ipadx=2, padx=2, sticky=W)
+        # Create a container frame for all controls (dropdowns and buttons) to keep them centered
+        # This ensures their position remains stable when console font size changes
+        fmControls = ttk.Frame(self.win)
+        fmControls.grid(row=1, column=0, columnspan=3, pady=5, sticky=N+S)
+        # Configure columns to center the content horizontally
+        fmControls.columnconfigure(0, weight=1)
+        fmControls.columnconfigure(2, weight=1)
+        # Column 1 will contain the actual controls and won't expand
+        
+        # Inner container to hold all controls with fixed layout
+        fmControlsInner = ttk.Frame(fmControls)
+        fmControlsInner.grid(row=0, column=1, sticky=N)
+
+        fmProduct = ttk.Frame(fmControlsInner)
+        fmProduct.grid(row=0, column=0, ipadx=2, padx=2, sticky=W)
         self.labProduct = ttk.Label(fmProduct, text=txt('labProduct'), font=('Arial', 16))
         self.labProduct.grid(row=0, column=0, ipadx=5, padx=5, sticky=W)
 
@@ -220,8 +247,8 @@ class Uploader:
         else:
             tip(self.cbProduct, self.strProduct.get())
 
-        fmSoftwareVersion = ttk.Frame(self.win)
-        fmSoftwareVersion.grid(row=1, column=1, ipadx=2, padx=2, sticky=W)
+        fmSoftwareVersion = ttk.Frame(fmControlsInner)
+        fmSoftwareVersion.grid(row=0, column=1, ipadx=2, padx=2, sticky=W)
         self.labSoftwareVersion = ttk.Label(fmSoftwareVersion, text=txt('labSoftwareVersion'), font=('Arial', 16))
         self.labSoftwareVersion.grid(row=0, ipadx=5, padx=5, sticky=W)
         self.cbSoftwareVersion = ttk.Combobox(fmSoftwareVersion, textvariable=self.strSoftwareVersion, foreground='blue', font=12)
@@ -236,8 +263,8 @@ class Uploader:
         self.cbSoftwareVersion['values'] = software_version_list
         self.cbSoftwareVersion.grid(row=1, ipadx=5, padx=5, sticky=W)
 
-        fmBoardVersion = ttk.Frame(self.win)
-        fmBoardVersion.grid(row=1, column=2, ipadx=2, padx=2, sticky=W)
+        fmBoardVersion = ttk.Frame(fmControlsInner)
+        fmBoardVersion.grid(row=0, column=2, ipadx=2, padx=2, sticky=W)
         self.labBoardVersion = ttk.Label(fmBoardVersion, text=txt('labBoardVersion'), font=('Arial', 16))
         self.labBoardVersion.grid(row=0, ipadx=5, padx=5, sticky=W)
         
@@ -250,7 +277,7 @@ class Uploader:
         # set list for Combobox
         if self.strProduct.get() == 'Bittle X':
             if self.lastSetting[3] in NyBoard_version_list:
-                self.cbBoardVersion.set(BiBoard_version_list[1])
+                self.cbBoardVersion.set(BiBoard_version_list[2])
             board_version_list = BiBoard_version_list
         elif self.strProduct.get() == 'Bittle X+Arm':
             if self.lastSetting[3] in NyBoard_version_list:
@@ -265,8 +292,8 @@ class Uploader:
         self.cbBoardVersion['values'] = board_version_list
         self.cbBoardVersion.grid(row=1, ipadx=5, padx=5, sticky=W)
 
-        fmMode = ttk.Frame(self.win)
-        fmMode.grid(row=2, column=0, ipadx=2, padx=2, pady=6,sticky=W)
+        fmMode = ttk.Frame(fmControlsInner)
+        fmMode.grid(row=1, column=0, ipadx=2, padx=2, pady=6, sticky=W)
         self.labMode = ttk.Label(fmMode, text=txt('labMode'), font=('Arial', 16))
         self.labMode.grid(row=0, column=0, ipadx=5, padx=5, sticky=W)
 
@@ -288,8 +315,8 @@ class Uploader:
         self.cbMode['values'] = cbModeList   # the mode names are already translated
         self.cbMode.grid(row=1, ipadx=5, padx=5, sticky=W)
 
-        fmSerial = ttk.Frame(self.win)    # relief=GROOVE
-        fmSerial.grid(row=2, column=1, ipadx=2, padx=2, pady=6, sticky=W)
+        fmSerial = ttk.Frame(fmControlsInner)    # relief=GROOVE
+        fmSerial.grid(row=1, column=1, ipadx=2, padx=2, pady=6, sticky=W)
         self.labPort = ttk.Label(fmSerial, text=txt('labPort'), font=('Arial', 16))
         self.labPort.grid(row=0, ipadx=5, padx=5, sticky=W)
         self.cbPort = ttk.Combobox(fmSerial, textvariable=self.strPort, foreground='blue', font=12)    # width=38,
@@ -297,10 +324,20 @@ class Uploader:
         # Refresh port list from system to ensure we have all available ports
         # This is especially important after manual port selection
         try:
-            from SerialCommunication import Communication
+            # Communication is already imported via "from PetoiRobot import *"
             
-            # Remember user's manually selected port (if any)
+            # Remember user's manually selected port (if any) BEFORE clearing portStrList
             user_selected_port = portStrList[0] if len(portStrList) > 0 else None
+            # Check if port was manually selected (from manualSelect dialog)
+            # manuallySelectedPort is imported from PetoiRobot.ardSerial via "from PetoiRobot import *"
+            # IMPORTANT: Check this flag BEFORE clearing portStrList, as it might be cleared elsewhere
+            try:
+                # Import manuallySelectedPort from the module to ensure we can access it
+                from PetoiRobot.ardSerial import manuallySelectedPort
+                is_manually_selected = manuallySelectedPort
+            except (NameError, ImportError):
+                # If manuallySelectedPort is not available, assume it's not manually selected
+                is_manually_selected = False
             
             # Get all system ports
             currentPorts = Communication.Print_Used_Com()
@@ -314,15 +351,32 @@ class Uploader:
             # If user manually selected a port and it's still available, set it as current selection
             if user_selected_port and user_selected_port in current_port_names:
                 self.strPort.set(user_selected_port)
-                logger.info(f"Preserved manually selected port: {user_selected_port}")
+                # Store whether this was manually selected for later display
+                self.portWasManuallySelected = is_manually_selected
+                if is_manually_selected:
+                    logger.info(f"Preserved manually selected port: {user_selected_port}")
+                else:
+                    logger.info(f"Automatically detected serial port: {user_selected_port}")
+                # Clear the global flag after checking
+                try:
+                    from PetoiRobot.ardSerial import manuallySelectedPort
+                    # Use the module reference to set the value
+                    import PetoiRobot.ardSerial as ardSerial_module
+                    ardSerial_module.manuallySelectedPort = False
+                except (NameError, ImportError):
+                    pass
+            else:
+                # No port selected or port not available, mark as not manually selected
+                self.portWasManuallySelected = False
         except Exception as e:
             logger.error(f"Failed to refresh port list: {e}")
+            self.portWasManuallySelected = False
         
         self.updatePortlist()
         self.cbPort.grid(row=1, ipadx=5, padx=5, sticky=W)
 
-        fmFacReset = ttk.Frame(self.win)    # relief=GROOVE
-        fmFacReset.grid(row=2, column=2, ipadx=2, padx=2, pady=6, sticky=W + E)
+        fmFacReset = ttk.Frame(fmControlsInner)    # relief=GROOVE
+        fmFacReset.grid(row=1, column=2, ipadx=2, padx=2, pady=6, sticky=W + E)
         self.btnFacReset = Button(fmFacReset, text=txt('btnFacReset'), font=('Arial', 16, 'bold'), fg='red',
                                   relief='groove', command=self.factoryReset)
         self.btnFacReset.grid(row=0, ipadx=5, ipady=5, padx=9, pady=8, sticky=W + E + N + S)
@@ -330,8 +384,8 @@ class Uploader:
         fmFacReset.columnconfigure(0, weight=1)
         fmFacReset.rowconfigure(0, weight=1)
 
-        fmUpload = ttk.Frame(self.win)
-        fmUpload.grid(row=3, columnspan=3, ipadx=2, padx=2, pady=8, sticky=W + E + N + S)
+        fmUpload = ttk.Frame(fmControlsInner)
+        fmUpload.grid(row=2, columnspan=3, ipadx=2, padx=2, pady=8, sticky=W + E + N + S)
         self.btnUpgrade = Button(fmUpload, text=txt('btnUpgrade'), font=('Arial', 16, 'bold'), foreground='blue',
                                 background=self.backgroundColor, relief='groove', command=self.upgrade)
         self.btnUpgrade.grid(row=0, column=0, ipadx=5, padx=5, pady=5, sticky=W + E)
@@ -345,18 +399,22 @@ class Uploader:
         fmUpload.rowconfigure(0, weight=1)
 
         fmStatus = ttk.Frame(self.win)
-        fmStatus.grid(row=4, columnspan=3, ipadx=2, padx=2, pady=5, sticky=W + E + N + S)
+        fmStatus.grid(row=2, columnspan=3, ipadx=2, padx=2, pady=5, sticky=W + E + N + S)
         self.statusBar = ttk.Label(fmStatus, textvariable=self.strStatus, font=('Arial', 16), relief=SUNKEN)
         self.statusBar.grid(row=0, ipadx=5, padx=5, sticky=W + E + N + S)
         fmStatus.columnconfigure(0, weight=1)
 
         # Console frame for displaying log file content
         fmConsole = ttk.Frame(self.win)
-        fmConsole.grid(row=5, columnspan=3, ipadx=2, padx=2, pady=5, sticky=W + E + N + S)
+        fmConsole.grid(row=3, columnspan=3, ipadx=2, padx=2, pady=5, sticky=W + E + N + S)
         
         # Header frame for Console label and Clear button
         fmConsoleHeader = ttk.Frame(fmConsole)
         fmConsoleHeader.grid(row=0, column=0, columnspan=2, sticky=W + E)
+        # Configure columns so buttons stay on the right when window resizes
+        fmConsoleHeader.columnconfigure(0, weight=1)  # Label column expands
+        fmConsoleHeader.columnconfigure(1, weight=0)  # Copy button - fixed width
+        fmConsoleHeader.columnconfigure(2, weight=0)  # Clear button - fixed width
         
         self.labConsole = ttk.Label(fmConsoleHeader, text=txt('Console') + ':', font=('Arial', 14, 'bold'))
         self.labConsole.grid(row=0, column=0, ipadx=5, padx=5, sticky=W)
@@ -369,8 +427,6 @@ class Uploader:
                                      command=self.clearConsole)
         self.btnClearConsole.grid(row=0, column=2, ipadx=5, padx=5, sticky=E)
         
-        fmConsoleHeader.columnconfigure(0, weight=1)
-        
         # Create scrollbars for the console text
         scrollbarY = Scrollbar(fmConsole)
         scrollbarY.grid(row=1, column=1, sticky=N + S)
@@ -379,7 +435,7 @@ class Uploader:
         scrollbarX.grid(row=2, column=0, sticky=W + E)
         
         # Create console text widget
-        self.txtConsole = Text(fmConsole, height=15, width=80, font=('Courier', 9),
+        self.txtConsole = Text(fmConsole, height=15, width=80, font=('Courier', 16),
                               wrap=NONE, state=DISABLED,
                               yscrollcommand=scrollbarY.set,
                               xscrollcommand=scrollbarX.set)
@@ -403,19 +459,19 @@ class Uploader:
         self.bParaUpload = False
         self.bFacReset = False
         self.prepareConsoleForNewOperation()
-        self.autoupload()
+        self.uploadSuccess = self.autoupload()
 
     def factoryReset(self):
         self.bParaUpload = True
         self.bFacReset = True
         self.prepareConsoleForNewOperation()
-        self.autoupload()
+        self.uploadSuccess = self.autoupload()
 
     def upgrade(self):
         self.bParaUpload = True
         self.bFacReset = False
         self.prepareConsoleForNewOperation()
-        self.autoupload()
+        self.uploadSuccess = self.autoupload()
 
     def updatePortlist(self):
         """Update port list in UI (called from main thread only)"""
@@ -449,6 +505,9 @@ class Uploader:
             elif port_number_list:
                 # Only change to first port if current selection is invalid or empty
                 self.cbPort.set(port_number_list[0])
+                # Mark as auto-detected if not already marked as manually selected
+                if not hasattr(self, 'portWasManuallySelected') or not self.portWasManuallySelected:
+                    self.portWasManuallySelected = False
                 logger.debug(f"Auto-selected first port: {port_number_list[0]}")
 
     def checkPortsMainThread(self):
@@ -457,8 +516,7 @@ class Uploader:
             return
             
         try:
-            # Import here to ensure it's available
-            from SerialCommunication import Communication
+            # Communication is already imported via "from PetoiRobot import *"
             
             # Get current port list
             currentPorts = Communication.Print_Used_Com()
@@ -549,7 +607,14 @@ class Uploader:
                                 self.cbPort['values'] = current_port_names
                                 self.cbPort.set(new_port)
                             
-                            logger.info(f"Auto-selected preferred new port: {new_port}")
+                            # Mark that this port was auto-detected, not manually selected
+                            self.portWasManuallySelected = False
+                            # Clear the global flag if it exists
+                            try:
+                                manuallySelectedPort = False
+                            except NameError:
+                                pass
+                            logger.info(f"Automatically detected serial port: {new_port}")
                         else:
                             # First check, just update UI without popup
                             logger.info(f"First check - detected ports without popup: {added_ports}")
@@ -709,10 +774,12 @@ class Uploader:
 
     def chooseProduct(self, event):
         if self.strProduct.get() == 'Bittle X':
-            self.strBoardVersion.set(BiBoard_version_list[1])
+            if self.strBoardVersion.get() in NyBoard_version_list:
+                self.strBoardVersion.set(BiBoard_version_list[2])
             board_version_list = BiBoard_version_list
         elif self.strProduct.get() == 'Nybble Q' or self.strProduct.get() == 'Bittle X+Arm':
-            self.cbBoardVersion.set(BiBoard_version_list[2])
+            if self.strBoardVersion.get() in NyBoard_version_list:
+                self.cbBoardVersion.set(BiBoard_version_list[2])
             board_version_list = BiBoard_version_list
         else:
             board_version_list = NyBoard_version_list + BiBoard_version_list
@@ -725,6 +792,9 @@ class Uploader:
         self.cbBoardVersion['values'] = board_version_list
         self.updateMode()
         self.setActiveOption()
+        if self.OSname == 'aqua':
+            # For macOS, update port list and it will handle selection
+            self.updatePort()
 
     def updateMode(self):
         if self.strProduct.get() == 'Bittle' or self.strProduct.get() == 'Nybble':
@@ -984,7 +1054,7 @@ class Uploader:
             messagebox.showinfo(title=None, message=txt('parameterFinish'))
 
 
-    def saveConfigToFile(self,filename):
+    def saveConfig(self,filename):
         if len(self.configuration) == 6:
             self.configuration = [self.defaultLan, self.lastSetting[0], self.lastSetting[1], self.lastSetting[2],
                                   self.lastSetting[3], self.lastSetting[4]]
@@ -992,10 +1062,16 @@ class Uploader:
             self.configuration = [self.defaultLan, self.lastSetting[0], self.lastSetting[1], self.lastSetting[2],
                                   self.lastSetting[3], self.lastSetting[4], self.configuration[6],self.configuration[7]]
 
-        with open(filename, "w", encoding="utf-8") as f:
-            lines = '\n'.join(self.configuration)+'\n'
-            f.writelines(lines)
-            # f.close()
+        saveConfigToFile(self.configuration, filename)
+
+        # 更新配置文件
+        # 第9行：保存此次运行程序时的系统串口列表
+        # 第10行：保存此次运行程序得到的可以打开的串口列表
+        allPortNames = portStrList
+        newValidPorts = readValidPortsFromConfig()
+        if self.validPort != "" and self.validPort not in newValidPorts:
+            newValidPorts.append(self.validPort)
+        savePortsToConfig(allPortNames, newValidPorts)
 
 
     def showMessage(self,sta):
@@ -1114,22 +1190,24 @@ class Uploader:
                             pass                         # no need upload configuration firmware again
                         else:
                             if self.OSname == 'x11':     # Linuxself.OSname == 'x11':     # Linux
-                                # check_call(avrdudePath + 'avrdude -C' + avrdudeconfPath + 'avrdude.conf -v -V -patmega328p -carduino -P%s -b115200 -D -Uflash:w:%s:i' % \
-                                #         (port, filename[s]), shell=self.shellOption)
-                                cmd = avrdudePath + 'avrdude -C' + avrdudeconfPath + 'avrdude.conf -v -V -patmega328p -carduino -P' + port + ' -b115200 -D -Uflash:w:' + \
-                                    filename[s] + ':i'
+                                # Use list form to avoid shell parsing issues with paths containing spaces
+                                cmd = [avrdudePath + 'avrdude', '-C', avrdudeconfPath + 'avrdude.conf', 
+                                       '-v', '-V', '-patmega328p', '-carduino', '-P', port, 
+                                       '-b115200', '-D', '-Uflash:w:' + filename[s] + ':i']
+                                use_shell = False
                             else:
-                                # check_call(avrdudePath + 'avrdude -C' + avrdudePath + 'avrdude.conf -v -V -patmega328p -carduino -P%s -b115200 -D -Uflash:w:%s:i > ./avrdude_log.txt 2> ./avrdude_errors.txt' % \
-                                #         (port, filename[s]), shell=self.shellOption)
-                                cmd = avrdudePath + 'avrdude -C' + avrdudePath + 'avrdude.conf -v -V -patmega328p -carduino -P' + port + ' -b115200 -D -Uflash:w:' + \
-                                    filename[s] + ':i'
+                                # Use list form to avoid shell parsing issues with paths containing spaces
+                                cmd = [avrdudePath + 'avrdude', '-C', avrdudePath + 'avrdude.conf', 
+                                       '-v', '-V', '-patmega328p', '-carduino', '-P', port, 
+                                       '-b115200', '-D', '-Uflash:w:' + filename[s] + ':i']
+                                use_shell = False
 
                             # Run the program and capture output in real-time
                             # Allow GUI to update display before blocking operation
                             self.win.update_idletasks()
                             
                             # Use Popen with PIPE for real-time output
-                            process = subprocess.Popen(cmd, shell=self.shellOption, 
+                            process = subprocess.Popen(cmd, shell=use_shell, 
                                                      stdout=subprocess.PIPE,
                                                      stderr=subprocess.STDOUT,
                                                      bufsize=1,
@@ -1263,8 +1341,8 @@ class Uploader:
                 fnBootLoader = path + 'OpenCatEsp32' + modeName + '.ino.bootloader.bin'
                 # fnPartitions = path + 'OpenCatEsp32Standard.ino.partitions.bin'
                 fnPartitions = path + 'OpenCatEsp32' + modeName + '.ino.partitions.bin'
-                # fnMainFunc = path + 'OpenCatEsp32Standard.ino.bin '
-                fnMainFunc = path + 'OpenCatEsp32' + modeName + '.ino.bin '
+                # fnMainFunc = path + 'OpenCatEsp32Standard.ino.bin'
+                fnMainFunc = path + 'OpenCatEsp32' + modeName + '.ino.bin'
                 fnBootApp = path + 'boot_app0.bin'
 
                 filename = [fnBootLoader, fnPartitions, fnBootApp, fnMainFunc]
@@ -1291,17 +1369,18 @@ class Uploader:
                     # (port, filename[0], filename[1], filename[2], filename[3]), shell=self.shellOption)
                     # subprocess.check_call(esptoolPath + 'esptool --chip esp32 --port %s --baud 921600 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size 4MB 0x1000 %s 0x8000 %s 0xe000 %s 0x10000 %s' % \
                     #     (port, filename[0], filename[1], filename[2], filename[3]), shell=self.shellOption)
-                    cmd = esptoolPath + 'esptool --chip esp32 --port ' + port + ' --baud 921600 --before default_reset --after hard_reset write_flash -z --flash_mode dio --flash_freq 80m --flash_size 4MB 0x1000 ' \
-                        + filename[0] + \
-                        ' 0x8000 ' + filename[1] + \
-                        ' 0xe000 ' + filename[2] + \
-                        ' 0x10000 ' + filename[3]
+                    # Use list form to avoid shell parsing issues with paths containing spaces
+                    cmd = [esptoolPath + 'esptool', '--chip', 'esp32', '--port', port, 
+                           '--baud', '921600', '--before', 'default_reset', '--after', 'hard_reset', 
+                           'write_flash', '-z', '--flash_mode', 'dio', '--flash_freq', '80m', 
+                           '--flash_size', '4MB', '0x1000', filename[0], 
+                           '0x8000', filename[1], '0xe000', filename[2], '0x10000', filename[3]]
                     # Run the program and capture output in real-time
                     # Allow GUI to update display before blocking operation
                     self.win.update_idletasks()
                     
                     # Use Popen with PIPE for real-time output
-                    process = subprocess.Popen(cmd, shell=self.shellOption, 
+                    process = subprocess.Popen(cmd, shell=False, 
                                              stdout=subprocess.PIPE,
                                              stderr=subprocess.STDOUT,
                                              bufsize=1,
@@ -1419,11 +1498,6 @@ class Uploader:
                     self.strStatus.set(status)
                     self.statusBar.update()
 
-            self.lastSetting = self.currentSetting
-            if self.bFacReset:
-                self.strMode.set(txt('Standard'))
-            self.saveConfigToFile(defaultConfPath)
-                
             # for there is no calibrate IMU error
             if not self.bIMUerror:
                 print('Finish!')
@@ -1432,6 +1506,13 @@ class Uploader:
                 self.statusBar.update()
                 messagebox.showinfo(title=None, message=txt('msgFinish'))
             self.force_focus()  # force the main interface to get focus
+
+            self.lastSetting = self.currentSetting
+            self.validPort = self.strPort.get()
+            if self.bFacReset:
+                self.strMode.set(txt('Standard'))
+            self.saveConfig(defaultConfPath)
+
             return True
         except Exception as e:
             logger.error(f"Error in autoupload: {e}")
@@ -1442,7 +1523,8 @@ class Uploader:
         try:
             # Create a custom handler that also stores logs in memory before GUI is ready
             console_handler = ConsoleHandler(self.txtConsole, self.logQueue)
-            formatter = logging.Formatter('%(asctime)s %(name)s - %(levelname)s - %(message)s')
+            # Format: timestamp - levelname - message (no module name)
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
             console_handler.setFormatter(formatter)
             console_handler.setLevel(logging.INFO)
             
@@ -1473,38 +1555,42 @@ class Uploader:
             
             # Display startup logs in the same format as logging
             startup_logs = [
-                f"{timestamp} ardSerial - INFO - ardSerial date: Nov. 27, 2025\n",
-                f"\n",
-                f"{timestamp} ardSerial - INFO - Python version is {sys.version.split()[0].split('.')}\n"
+                f"{timestamp} - INFO - ardSerial date: {ardSerialDate}\n",
+                # f"\n",
+                f"{timestamp} - INFO - Python version is {sys.version.split()[0].split('.')}\n"
             ]
             
             # Save the first 2 startup log lines for later restoration (after Clear button)
             self.savedStartupLogs = [
-                f"{timestamp} ardSerial - INFO - ardSerial date: Nov. 27, 2025",
-                f"{timestamp} ardSerial - INFO - Python version is {sys.version.split()[0].split('.')}"
+                f"{timestamp} - INFO - ardSerial date: {ardSerialDate}",
+                f"{timestamp} - INFO - Python version is {sys.version.split()[0].split('.')}"
             ]
             
             # Add configuration info if available
             if hasattr(self, 'configuration') and len(self.configuration) >= 6:
-                startup_logs.append(f"\n")
-                startup_logs.append(f"{timestamp} ardSerial - INFO - {self.configuration}\n")
+                # startup_logs.append(f"\n")
+                startup_logs.append(f"{timestamp} - INFO - {self.configuration}\n")
             
             # Add firmware folder info
             if hasattr(self, 'strFileDir'):
-                startup_logs.append(f"\n")
-                startup_logs.append(f"{timestamp} ardSerial - INFO - The firmware file folder is {self.strFileDir.get()}\n")
+                # startup_logs.append(f"\n")
+                startup_logs.append(f"{timestamp} - INFO - The firmware file folder is {self.strFileDir.get()}\n")
             
             # Add port information (from initialization)
             if hasattr(self, 'strPort') and portStrList:
-                startup_logs.append(f"\n")
-                startup_logs.append(f"{timestamp} ardSerial - INFO - Refreshed port list from system: {portStrList}\n")
+                # startup_logs.append(f"\n")
+                startup_logs.append(f"{timestamp} - INFO - Refreshed port list from system: {portStrList}\n")
                 
                 if self.strPort.get():
-                    startup_logs.append(f"\n")
-                    startup_logs.append(f"{timestamp} ardSerial - INFO - Preserved manually selected port: {self.strPort.get()}\n")
+                    # startup_logs.append(f"\n")
+                    # Check if port was manually selected or auto-detected
+                    if hasattr(self, 'portWasManuallySelected') and self.portWasManuallySelected:
+                        startup_logs.append(f"{timestamp} - INFO - Preserved manually selected port: {self.strPort.get()}\n")
+                    else:
+                        startup_logs.append(f"{timestamp} - INFO - Automatically detected serial port: {self.strPort.get()}\n")
                 
-                startup_logs.append(f"\n")
-                startup_logs.append(f"{timestamp} ardSerial - INFO - portStrList is {portStrList}\n")
+                # startup_logs.append(f"\n")
+                startup_logs.append(f"{timestamp} - INFO - portStrList is {portStrList}\n")
             
             for log in startup_logs:
                 self.txtConsole.insert(END, log)
@@ -1739,8 +1825,8 @@ class Uploader:
             if hasattr(self, 'console_handler'):
                 root_logger = logging.getLogger()
                 root_logger.removeHandler(self.console_handler)
-            
-            self.saveConfigToFile(defaultConfPath)
+            if not self.uploadSuccess:
+                self.saveConfig(defaultConfPath)
             logger.info(f"{self.configuration}")
             self.win.destroy()
 

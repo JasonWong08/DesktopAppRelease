@@ -1,5 +1,5 @@
-versionNum = '1.2.6'
-dateStr = '2025-11-25'
+versionNum = '1.2.7'
+dateStr = '2025-12-18'
 
 textEN = {
     'lan':'English',
@@ -130,6 +130,9 @@ textEN = {
     'Copied selected text to clipboard':'Copied selected text to clipboard',
     'Copied all output to clipboard':'Copied all output to clipboard',
     'No output to copy':'No output to copy',
+    'Testing port':'Testing port',
+    'Port is not connected to a Petoi device':'Port \'{portName}\' is not connected to a Petoi device!',
+    'Port cannot be opened':'Port \'{portName}\' cannot be opened!',
 
     'Manual mode':'Manual mode',
     'Replug mode':'Replug mode',
@@ -453,6 +456,9 @@ textCN = {
     'Copied selected text to clipboard':'已复制选中文本到剪贴板',
     'Copied all output to clipboard':'已复制全部输出到剪贴板',
     'No output to copy':'没有可复制的输出',
+    'Testing port':'正在测试端口',
+    'Port is not connected to a Petoi device':'端口 \'{portName}\' 未连接到 Petoi 设备！',
+    'Port cannot be opened':'端口 \'{portName}\' 无法打开！',
     'Calibrate':'校准位',
     'Auto':'自动',
     'AutoCali failed': '''自动校准机械爪关节舵机失败！\n
@@ -761,6 +767,9 @@ textCN_TW = {
     'Copied selected text to clipboard':'已複製選中文本到剪貼板',
     'Copied all output to clipboard':'已複製全部輸出到剪貼板',
     'No output to copy':'沒有可複製的輸出',
+    'Testing port':'正在測試端口',
+    'Port is not connected to a Petoi device':'端口 \'{portName}\' 未連接到 Petoi 設備！',
+    'Port cannot be opened':'端口 \'{portName}\' 無法打開！',
     'Calibrate':'校準位',
     'Auto':'自動',
     'AutoCali failed': '''自動校準機械爪關節舵機失敗！\n
@@ -1072,6 +1081,9 @@ textDE = {
     'Copied selected text to clipboard':'Ausgewählter Text in Zwischenablage kopiert',
     'Copied all output to clipboard':'Gesamte Ausgabe in Zwischenablage kopiert',
     'No output to copy':'Keine Ausgabe zum Kopieren',
+    'Testing port':'Port wird getestet',
+    'Port is not connected to a Petoi device':'Port \'{portName}\' ist nicht mit einem Petoi-Gerät verbunden!',
+    'Port cannot be opened':'Port \'{portName}\' kann nicht geöffnet werden!',
 
     'Manual mode':'Manueller Modus',
     'Replug mode':'Replug-Modus',
@@ -1388,6 +1400,9 @@ textTH = {
     'Copied selected text to clipboard':'คัดลอกข้อความที่เลือกไปยังคลิปบอร์ดแล้ว',
     'Copied all output to clipboard':'คัดลอกผลลัพธ์ทั้งหมดไปยังคลิปบอร์ดแล้ว',
     'No output to copy':'ไม่มีผลลัพธ์ที่จะคัดลอก',
+    'Testing port':'กำลังทดสอบพอร์ต',
+    'Port is not connected to a Petoi device':'พอร์ต \'{portName}\' ไม่ได้เชื่อมต่อกับอุปกรณ์ Petoi!',
+    'Port cannot be opened':'พอร์ต \'{portName}\' ไม่สามารถเปิดได้!',
 
     'Manual mode':'โหมดแมนนวล',
     'Replug mode':'โหมดเสียบปลั๊ก',
@@ -1703,6 +1718,9 @@ textFR={
     'Copied selected text to clipboard':'Texte sélectionné copié dans le presse-papiers',
     'Copied all output to clipboard':'Toute la sortie copiée dans le presse-papiers',
     'No output to copy':'Aucune sortie à copier',
+    'Testing port':'Test du port',
+    'Port is not connected to a Petoi device':'Le port \'{portName}\' n\'est pas connecté à un appareil Petoi !',
+    'Port cannot be opened':'Le port \'{portName}\' ne peut pas être ouvert !',
 
     'Manual mode':'Mode manuel',
     'Replug mode':'Mode Replug',
@@ -2016,6 +2034,9 @@ textJP={
     'Copied selected text to clipboard':'選択したテキストをクリップボードにコピーしました',
     'Copied all output to clipboard':'すべての出力をクリップボードにコピーしました',
     'No output to copy':'コピーする出力がありません',
+    'Testing port':'ポートをテスト中',
+    'Port is not connected to a Petoi device':'ポート \'{portName}\' は Petoi デバイスに接続されていません！',
+    'Port cannot be opened':'ポート \'{portName}\' を開くことができません！',
 
     'Manual mode':'マニュアルモード',
     'Replug mode':'リプラグモード',
@@ -2317,6 +2338,9 @@ textIT = {
     'Copied selected text to clipboard':'Testo selezionato copiato negli appunti',
     'Copied all output to clipboard':'Tutto l\'output copiato negli appunti',
     'No output to copy':'Nessun output da copiare',
+    'Testing port':'Test del porto',
+    'Port is not connected to a Petoi device':'La porta \'{portName}\' non è connessa a un dispositivo Petoi!',
+    'Port cannot be opened':'La porta \'{portName}\' non può essere aperta!',
 
     'Manual mode':'Modalità manuale',
     'Replug mode':'Modalità di ricarica',
@@ -2628,6 +2652,9 @@ textRU = {
     'Copied selected text to clipboard':'Выбранный текст скопирован в буфер обмена',
     'Copied all output to clipboard':'Весь вывод скопирован в буфер обмена',
     'No output to copy':'Нет вывода для копирования',
+    'Testing port':'Тестирование порта',
+    'Port is not connected to a Petoi device':'Порт \'{portName}\' не подключен к устройству Petoi!',
+    'Port cannot be opened':'Порт \'{portName}\' не может быть открыт!',
 
     'Manual mode':'Ручной режим',
     'Replug mode':'Переподключение',

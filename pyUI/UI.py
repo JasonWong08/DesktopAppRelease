@@ -1,16 +1,16 @@
 #!/usr/bin/python3
-# -*- coding: UTF-8 -*-
+# -*- coding: utf-8 -*-
 
 # Rongzhong Li
 # Petoi LLC
 # May.22nd, 2022
 
-
+from tkinter import PhotoImage
 from FirmwareUploader import *
 from SkillComposer import *
 from Calibrator import *
 from Debugger import *
-from tkinter import PhotoImage
+
 
 language = languageList['English']
 apps = ['Firmware Uploader', 'Joint Calibrator', 'Skill Composer', 'Debugger']  # ,'Task Scheduler']
@@ -21,10 +21,37 @@ def txt(key):
 class UI:
     def __init__(self):
         global language
-        try:
+        # try:
+            
+        # except Exception as e:
+        #     print('Create configuration file')
+        #     self.defaultLan = 'English'
+        #     self.configName = 'Bittle'
+        #     self.defaultPath = releasePath[:-1]
+        #     self.defaultSwVer = '2.0'
+        #     self.defaultBdVer = NyBoard_version
+        #     self.defaultMode = 'Standard'
+        #     self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
+        #                           self.defaultMode]
+
+        if not os.path.exists(defaultConfPath):
+            self.defaultLan = 'English'
+            self.configName = 'Bittle'
+            self.defaultPath = releasePath[:-1]
+            self.defaultSwVer = '2.0'
+            self.defaultBdVer = NyBoard_version
+            self.defaultMode = 'Standard'
+            self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
+                                  self.defaultMode]
+            # 如果不存在，先创建并写入默认配置
+            with open(defaultConfPath, "w", encoding="utf-8") as f:
+                lines = '\n'.join(self.configuration) + '\n'
+                f.writelines(lines)
+            print("The file does not exist and has been automatically created.")
+        else:
             with open(defaultConfPath, "r", encoding="utf-8") as f:
                 lines = f.readlines()
-                # f.close()
+
             lines = [line.split('\n')[0] for line in lines]  # remove the '\n' at the end of each line
             num = len(lines)
             logger.debug(f"len(lines): {num}")
@@ -46,19 +73,6 @@ class UI:
                 self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
                                       self.defaultMode]
 
-
-        except Exception as e:
-            print('Create configuration file')
-            self.defaultLan = 'English'
-            self.configName = 'Bittle'
-            self.defaultPath = releasePath[:-1]
-            self.defaultSwVer = '2.0'
-            self.defaultBdVer = NyBoard_version
-            self.defaultMode = 'Standard'
-            self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
-                                  self.defaultMode]
-            # raise e
-
         language = languageList[self.defaultLan]
 
         self.window = Tk()
@@ -66,6 +80,7 @@ class UI:
 
         self.OSname = self.window.call('tk', 'windowingsystem')
         if self.OSname == 'win32':
+            logger.debug(f"resourcePath: {resourcePath}")
             self.window.iconbitmap(resourcePath + 'Petoi.ico')
             self.window.geometry('398x360+800+400')
         elif self.OSname == 'aqua':
@@ -121,7 +136,8 @@ class UI:
         self.modelLabel.configure(text=self.configName)
         print(self.configName)
         if self.configName == "Bittle X":
-            self.defaultBdVer = "BiBoard_V0_2"
+            if 'NyBoard' in self.defaultBdVer:
+                self.defaultBdVer = "BiBoard_V1_0"
         elif self.configName == "Bittle X+Arm":
             self.defaultBdVer = "BiBoard_V1_0"
 
@@ -138,26 +154,21 @@ class UI:
                 self.window.winfo_children()[1 + i].config(text=txt(apps[i]))
                 if apps[i] == 'Debugger':
                     tip(self.window.winfo_children()[1 + i], txt('tipDebugger'))
-
-
-    def saveConfigToFile(self, filename):
+    
+    def saveConfig(self,filename):
         if len(self.configuration) == 6:
             self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
                          self.defaultMode]
         else:
             self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
                                   self.defaultMode, self.defaultCreator, self.defaultLocation]
-        config.strLan = self.defaultLan
-        logger.debug(f"save the language as: {config.strLan}.")
-        f = open(filename, 'w+', encoding="utf-8")
-        lines = '\n'.join(self.configuration) + '\n'
-        f.writelines(lines)
-        f.close()
+
+        saveConfigToFile(self.configuration, filename)
 
     def utility(self, app):
         global language
 
-        self.saveConfigToFile(defaultConfPath)
+        self.saveConfig(defaultConfPath)
         logger.info(f"{self.configuration}")
         self.window.destroy()
 
@@ -200,7 +211,7 @@ class UI:
 
     def on_closing(self):
         if messagebox.askokcancel(txt('Quit'), txt('Do you want to quit?')):
-            self.saveConfigToFile(defaultConfPath)
+            self.saveConfig(defaultConfPath)
             logger.info(f"{self.configuration}")
             self.window.destroy()
 

@@ -1,7 +1,7 @@
 #!/usr/bin/python3
-# -*- coding: UTF-8 -*-
+# -*- coding: utf-8 -*-
 
-from commonVar import *
+from PetoiRobot import *
 from tkinter.colorchooser import askcolor
 
 root = Tk()

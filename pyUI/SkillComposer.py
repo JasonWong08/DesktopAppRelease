@@ -1,20 +1,18 @@
 #!/usr/bin/python3
-# -*- coding: UTF-8 -*-
+# -*- coding: utf-8 -*-
 
 # Rongzhong Li
 # Petoi LLC
 # May.22nd, 2022
-import sys
-sys.path.append('../serialMaster/')
-import random
+
 import tkinter.font as tkFont
 import copy
-import threading
 from tkinter.filedialog import asksaveasfile, askopenfilename
 from tkinter.colorchooser import askcolor
-from commonVar import *
 import re
 from tkinter import ttk
+from PetoiRobot import *
+
 language = languageList['English']
 def txt(key):
     return language.get(key, textEN[key])
@@ -117,34 +115,34 @@ RegularMacSet = {
 }
 
 DoF16WinSet = {
-    "sliderW": 320,
+    "sliderW": 380,
     "sixW": 6,
-    "rowUnbindButton": 5,
-    "rowJoint1": 11,
-    "sliderLen": 150,
+    "rowUnbindButton": 7,
+    "rowJoint1": 12,
+    "sliderLen": 220,
     "rSpan": 3,
     "rowJoint2": 2,
-    "rowFrameImu": 6,
-    "imuSliderLen": 125,
+    "rowFrameImu": 8,
+    "imuSliderLen": 260,
     "schedulerHeight": 310,
     "rowFrameImage": 3,
-    "imgWidth": 450,         # Increased to 1.5x (300 * 1.5 = 450) for even better visibility
+    "imgWidth": 350,         # Increased to 1.5x (300 * 1.5 = 450) for even better visibility
     "imgRowSpan": 4          # Increased row span to accommodate larger image
 }
 
 DoF16MacSet = {
     "sliderW": 338,
     "sixW": 5,
-    "rowUnbindButton": 5,
-    "rowJoint1": 11,
-    "sliderLen": 150,
+    "rowUnbindButton": 7,
+    "rowJoint1": 13,
+    "sliderLen": 160,
     "rSpan": 3,
     "rowJoint2": 2,
-    "rowFrameImu": 6,
-    "imuSliderLen": 125,
+    "rowFrameImu": 8,
+    "imuSliderLen": 200,
     "schedulerHeight": 310,
     "rowFrameImage": 3,
-    "imgWidth": 420,         # Increased to 1.5x (280 * 1.5 = 420) for even better visibility on Mac
+    "imgWidth": 320,         # Increased to 1.5x (280 * 1.5 = 420) for even better visibility on Mac
     "imgRowSpan": 4          # Increased row span to accommodate larger image
 }
 
@@ -211,7 +209,7 @@ class SkillComposer:
     def __init__(self,model, lan):
         global language
         language = lan
-        connectPort(goodPorts)
+        smartConnectPorts()
         start = time.time()
         while config.model_ == '':
             if time.time()-start > 5:
@@ -653,7 +651,11 @@ class SkillComposer:
 
     def deacGyrp(self):
         self.boardVer = config.version_
-        # printH("boardVer:", boardVer)
+        printH("boardVer:", self.boardVer)
+        # Check if boardVer is empty or None to avoid IndexError
+        if not self.boardVer or len(self.boardVer) == 0:
+            logger.warning(f"boardVer is empty, skipping gyro deactivation. config.version_: '{config.version_}'")
+            return
         if self.boardVer[0] == 'N':
             res = send(goodPorts, ['G', 0])
             if res != -1:
@@ -1834,22 +1836,18 @@ class SkillComposer:
 
         self.configuration = self.configuration[:6] + [self.creator.get(), self.location.get()]
 
-        self.saveConfigToFile(defaultConfPath)
+        self.saveConfig(defaultConfPath)
         self.creatorInfoAcquired = True
         logger.debug(f"saveID, self.creatorInfoAcquired: {self.creatorInfoAcquired}")
         self.creatorWin.destroy()
 
         
-    def saveConfigToFile(self, filename):
+    def saveConfig(self, filename):
         self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
                                   self.defaultMode, self.configuration[6], self.configuration[7]]
 
-        f = open(filename, 'w+', encoding="utf-8")
-        logger.debug(f"config: {self.configuration}")
-        lines = '\n'.join(self.configuration) + '\n'
-        f.writelines(lines)
-        time.sleep(0.1)
-        f.close()
+        saveConfigToFile(self.configuration, filename)
+
 
     def getCreatorInfo(self, modifyQ):
         # self.creatorInfoAcquired = True
@@ -2534,8 +2532,9 @@ class SkillComposer:
                 else:
                     self.dialValue[0].set(True)
                     self.frameDial.winfo_children()[1].update()
-                    goodPorts = {}
-                    connectPort(goodPorts)
+                    # goodPorts = {}
+                    # connectPort(goodPorts)
+                    smartConnectPorts()
                     
                     printH('***@@@ good ports', goodPorts)
                     #                    self.portMenu.destroy()
@@ -2561,7 +2560,7 @@ class SkillComposer:
                 #     printH(list(dialTable)[j], self.dialValue[j].get())
                 # print("end")
                 # printH("button name", list(dialTable)[i])
-                if key == 'Gyro' and self.boardVer[0] == 'B':
+                if key == 'Gyro' and self.boardVer and len(self.boardVer) > 0 and self.boardVer[0] == 'B':
                     # printH("Button state:", self.dialValue[2].get())
                     if self.dialValue[2].get():
                         result = send(ports, ['gB', 0])
@@ -2599,7 +2598,7 @@ class SkillComposer:
 
     def on_closing(self):
         if messagebox.askokcancel(txt('Quit'), txt('Do you want to quit?')):
-            self.saveConfigToFile(defaultConfPath)
+            self.saveConfig(defaultConfPath)
             self.keepChecking = False  # close the background thread for checking serial port
             self.window.destroy()
             closeAllSerial(goodPorts)

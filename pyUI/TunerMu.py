@@ -1,6 +1,6 @@
 #!/opt/anaconda3/envs/petoi/bin/python3
-# -*- coding: UTF-8 -*-
-from commonVar import *
+# -*- coding: utf-8 -*-
+from PetoiRobot import *
 
 language = languageList['English']
 parName = ['lensFactor','proportion','speed','pan','tilt','frontUpX','backUpX','frontDownX','backDownX','frontUpY','backUpY','frontDownY','backDownY','frontUp','backUp','frontDown','backDown']

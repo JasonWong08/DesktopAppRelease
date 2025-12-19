@@ -1,4 +1,4 @@
 model_ = ''
 version_ = ''
 modelList = []
-useMindPlus = False
+SHOW_GUI = True
