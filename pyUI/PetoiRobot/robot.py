@@ -33,7 +33,7 @@ def printH(head, value):
     print(value)
 
 if not config.SHOW_GUI:
-    printH("Mind+ date: ", "Feb 25, 2025")
+    printH("Mind+ date: ", "Dec 9, 2025")
 
 
 def makeDirectory(path):

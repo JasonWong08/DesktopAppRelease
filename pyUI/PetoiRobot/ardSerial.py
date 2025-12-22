@@ -674,7 +674,7 @@ def getModelAndVersion(result):
                 return
     config.model_ = 'Bittle'
     config.version_ = 'Unknown'
-    printH("@aaa config.version_:", config.version_)
+    # printH("@aaa config.version_:", config.version_)
     
 def updatePostureTable():
     global postureTable
@@ -1236,7 +1236,7 @@ def replug(PortList, needSendTask=True, needOpenPort=True):
                                     try:
                                         time.sleep(2)
                                         result = sendTask(PortList, serialObject, ['?', 0])
-                                        printH("@aaa result:", result)
+                                        # printH("@aaa result:", result)
                                         getModelAndVersion(result)
                                         # Check if device info was successfully retrieved
                                         if config.version_ != '' and config.version_ != 'Unknown':
