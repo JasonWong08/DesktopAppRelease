@@ -59,6 +59,7 @@ parameterWinSet = {
     "BittleX+Arm": BittleRWinSet,
     "DoF16": RegularWinSet,
     "Chero": CheroWinSet,
+    "Mini": CheroWinSet,
 }
 
 parameterMacSet = {
@@ -67,6 +68,7 @@ parameterMacSet = {
     "BittleX+Arm": BittleRMacSet,
     "DoF16": RegularMacSet,
     "Chero": CheroMacSet,
+    "Mini": CheroMacSet,
 }
 
 frontJointIdx = [4, 5, 8, 9, 12, 13]
@@ -96,10 +98,9 @@ class Calibrator:
             self.model = 'BittleX+Arm'
         elif config.model_ == 'NybbleQ':
             self.model = 'Nybble'
-        elif config.model_ == 'Chero':
-            self.model = 'Chero'
         else:
             self.model = config.model_
+        self.is6dof = self.model in ('Chero', 'Mini')
 
         self.winCalib = Tk()
         self.winCalib.title(txt('calibTitle'))
@@ -113,11 +114,11 @@ class Calibrator:
         else:
             self.calibButtonW = 4
         self.frameCalibButtons = Frame(self.winCalib)
-        # For Chero, position the button frame to avoid overlap with horizontal sliders
-        if self.model == 'Chero':
-            self.frameCalibButtons.grid(row=0, column=2, rowspan=14)  # Column 2 (middle) - increased by 1
+        # For Chero-like, position the button frame to avoid overlap with horizontal sliders
+        if self.is6dof:
+            self.frameCalibButtons.grid(row=0, column=2, rowspan=16)  # Column 2 (middle)
         else:
-            self.frameCalibButtons.grid(row=0, column=3, rowspan=13)  # Original position - increased by 1
+            self.frameCalibButtons.grid(row=0, column=3, rowspan=15)
         calibButton = Button(self.frameCalibButtons, text=txt('Calibrate'), fg = 'blue', width=self.calibButtonW,command=lambda cmd='c': self.calibFun(cmd))
         standButton = Button(self.frameCalibButtons, text=txt('Stand Up'), fg = 'blue', width=self.calibButtonW, command=lambda cmd='balance': self.calibFun(cmd))
         restButton = Button(self.frameCalibButtons, text=txt('Rest'),fg = 'blue', width=self.calibButtonW, command=lambda cmd='d': self.calibFun(cmd))
@@ -125,7 +126,7 @@ class Calibrator:
         saveButton = Button(self.frameCalibButtons, text=txt('Save'),fg = 'blue', width=self.calibButtonW, command=lambda: send(goodPorts, ['s', 0]))
         abortButton = Button(self.frameCalibButtons, text=txt('Abort'),fg = 'blue', width=self.calibButtonW, command=lambda: send(goodPorts, ['a', 0]))
 #        quitButton = Button(self.frameCalibButtons, text=txt('Quit'),fg = 'blue', width=self.calibButtonW, command=self.closeCalib)
-        if self.model == 'Chero':
+        if self.is6dof:
             calibButton.grid(row=7, column=0)
             restButton.grid(row=7, column=1)
             standButton.grid(row=7, column=2)
@@ -151,39 +152,41 @@ class Calibrator:
         if self.model == 'BittleX+Arm':
             # self.parameterSet = parameterSet['BittleX+Arm']
             scaleNames = BittleRScaleNames
-        elif self.model == 'Chero':
-            # For Chero, use RegularScaleNames but only show 6 joints
-            scaleNames = RegularScaleNames
+        elif self.is6dof:
+            # For Chero-like, use 6-DoF names
+            scaleNames = DoF6ScaleNames
         else:
             # self.parameterSet = parameterSet['Regular']
             scaleNames = RegularScaleNames
 
+        # Use actual model name for images (Mini has its own copies)
+        modelForImage = self.model
+
         if "B" in self.boardVersion:
             self.imgWiring = createImage(self.frameCalibButtons,
-                                         resourcePath + config.model_ + self.boardVersion[1] + '_Wire.jpeg',
+                                         resourcePath + modelForImage + self.boardVersion[1] + '_Wire.jpeg',
                                          self.parameterSet['imageW'])
         else:
             self.imgWiring = createImage(self.frameCalibButtons,
-                                         resourcePath + config.model_ + '_Wire.jpeg',
+                                         resourcePath + modelForImage + '_Wire.jpeg',
                                          self.parameterSet['imageW'])
 
-        self.imgWiring.grid(row=0, column=0, rowspan=5, columnspan=3)
+        # Place wiring image at top
+        self.imgWiring.grid(row=0, column=0, rowspan=5, columnspan=3, sticky='n')
         Hovertip(self.imgWiring, txt('tipImgWiring'))
 
-        self.imgPosture = createImage(self.frameCalibButtons, resourcePath + self.model + '_Ruler.jpeg', self.parameterSet['imageW'])
-        if self.model == 'Chero':
-            self.imgPosture.grid(row=8, column=0, rowspan=3, columnspan=3)
-        else:
-            self.imgPosture.grid(row=7, column=0, rowspan=3, columnspan=3)
+        self.imgPosture = createImage(self.frameCalibButtons, resourcePath + modelForImage + '_Ruler.jpeg', self.parameterSet['imageW'])
+        # Middle image between button rows
+        self.imgPosture.grid(row=2, column=0, rowspan=3, columnspan=3, sticky='n')
 
-        # For Chero, show only 6 joints; for others, show 16 joints
-        if self.model == 'Chero':
+        # For 6-DoF models, show 6 joints; otherwise 16
+        if self.is6dof:
             self.numJoints = 6
         else:
             self.numJoints = 16
 
         for i in range(self.numJoints):
-            if self.model == 'Chero':
+            if self.is6dof:
                 # Chero layout: joints 0,1 horizontal, joints 2,3,4,5 vertical (like DoF16 joints 8,9,10,11)
                 if i < 2:  # Joints 0, 1 - horizontal
                     tickDirection = 1
@@ -272,8 +275,8 @@ class Calibrator:
                 clr = 'yellow'
             
             # Set side labels
-            if self.model == 'Chero':
-                # For Chero, joints 2,3,4,5 should have side labels corresponding to DoF16 joints 8,9,10,11
+            if self.is6dof:
+                # For 6-DoF models, joints 2,3,4,5 should have side labels corresponding to DoF16 joints 8,9,10,11
                 if i in range(2, 6):  # Joints 2,3,4,5
                     # Map Chero joints 2,3,4,5 to DoF16 joints 8,9,10,11 labels
                     dof16_index = i + 6  # 2->8, 3->9, 4->10, 5->11
@@ -305,8 +308,8 @@ class Calibrator:
                                   command=lambda value, idx=i: self.setCalib(idx, value))
             self.calibSliders.append(sliderBar)
             
-            # Special layout handling for Chero
-            if self.model == 'Chero':
+            # Special layout handling for 6-DoF models
+            if self.is6dof:
                 if i < 2:  # Horizontal sliders (Head Pan/Tilt) - use cSPAN=2 like SkillComposer
                     label.grid(row=ROW, column=COL, columnspan=cSPAN, pady=2, sticky=ALIGN)
                 else:  # Vertical sliders - use columnspan=1 to prevent overlap
@@ -396,8 +399,8 @@ class Calibrator:
                 else:
                     self.calibSliders[2].set(offsets[2])
             else:
-                # For Chero, only set offsets for 6 joints; for others, set all 16
-                if self.model == 'Chero':
+                # For 6-DoF models, only set offsets for 6 joints; for others, set all 16
+                if self.is6dof:
                     for i in range(min(6, len(self.calibSliders), len(offsets))):
                         self.calibSliders[i].set(offsets[i])
                 else:
@@ -413,7 +416,7 @@ class Calibrator:
             self.imgPosture = createImage(self.frameCalibButtons, resourcePath + self.model + '_Walk.jpeg', imageW)
             send(goodPorts, ['kwkF', 0])
 
-        if self.model == 'Chero':
+        if self.is6dof:
             self.imgPosture.grid(row=8, column=0, rowspan=3, columnspan=3)
         else:
             self.imgPosture.grid(row=7, column=0, rowspan=3, columnspan=3)
