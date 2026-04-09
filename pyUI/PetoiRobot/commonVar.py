@@ -217,7 +217,7 @@ defaultConfPath = configDir + separation + 'defaultConfig.txt'
 print(defaultConfPath)
 
 def saveConfigToFile(configuration, filename):
-        # 读取现有内容
+        # Read existing file content
         lines = []
         if os.path.exists(filename):
             try:
@@ -226,20 +226,20 @@ def saveConfigToFile(configuration, filename):
             except Exception as e:
                 print(f'* Error reading config file: {e}')
 
-        # 确保现有的每一行都以换行符结尾（修复文件格式问题）
+        # Ensure every line ends with a newline (fixes inconsistent file formatting)
         for i in range(len(lines)):
             if not lines[i].endswith('\n'):
                 lines[i] += '\n'
         
-        # 确保至少有10行
+        # Ensure at least 10 lines exist
         while len(lines) < 10:
             lines.append('\n')
         
-        # 更新界面中的相关配置信息
+        # Update configuration lines from the UI
         for i in range(len(configuration)):
             lines[i] = configuration[i] + '\n'
         
-        # 写回文件
+        # Write back to file
         try:
             with open(filename, 'w', encoding='utf-8') as f:
                 f.writelines(lines)

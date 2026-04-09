@@ -5,6 +5,9 @@
 # Petoi LLC
 # May.22nd, 2022
 
+import os
+os.environ["PETOI_SHOW_GUI"] = "1"
+
 from tkinter import PhotoImage
 from FirmwareUploader import *
 from SkillComposer import *
@@ -43,7 +46,7 @@ class UI:
             self.defaultMode = 'Standard'
             self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
                                   self.defaultMode]
-            # 如果不存在，先创建并写入默认配置
+            # If missing, create the file and write default configuration first
             with open(defaultConfPath, "w", encoding="utf-8") as f:
                 lines = '\n'.join(self.configuration) + '\n'
                 f.writelines(lines)
@@ -55,18 +58,28 @@ class UI:
             lines = [line.split('\n')[0] for line in lines]  # remove the '\n' at the end of each line
             num = len(lines)
             logger.debug(f"len(lines): {num}")
-            self.defaultLan = lines[0]
-            self.configName = lines[1]
-            self.defaultPath = lines[2]
-            self.defaultSwVer = lines[3]
-            if lines[4] == "BiBoard_V0":
-                self.defaultBdVer = "BiBoard_V0_1"
+            
+            # Validate and set default language, use 'English' if empty or invalid
+            self.defaultLan = lines[0] if len(lines) > 0 and lines[0].strip() else 'English'
+            if self.defaultLan not in languageList:
+                logger.warning(f"Invalid language '{self.defaultLan}' in config, using 'English' instead")
+                self.defaultLan = 'English'
+            
+            # Validate and set other configuration values with defaults
+            self.configName = lines[1] if len(lines) > 1 and lines[1].strip() else 'Bittle'
+            self.defaultPath = lines[2] if len(lines) > 2 and lines[2].strip() else releasePath[:-1]
+            self.defaultSwVer = lines[3] if len(lines) > 3 and lines[3].strip() else '2.0'
+            if len(lines) > 4 and lines[4].strip():
+                if lines[4] == "BiBoard_V0":
+                    self.defaultBdVer = "BiBoard_V0_1"
+                else:
+                    self.defaultBdVer = lines[4]
             else:
-                self.defaultBdVer = lines[4]
-            self.defaultMode = lines[5]
+                self.defaultBdVer = NyBoard_version
+            self.defaultMode = lines[5] if len(lines) > 5 and lines[5].strip() else 'Standard'
             if len(lines) >= 8:
-                self.defaultCreator = lines[6]
-                self.defaultLocation = lines[7]
+                self.defaultCreator = lines[6] if len(lines) > 6 and lines[6].strip() else 'Nature'
+                self.defaultLocation = lines[7] if len(lines) > 7 and lines[7].strip() else 'Earth'
                 self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
                                       self.defaultMode, self.defaultCreator, self.defaultLocation]
             else:

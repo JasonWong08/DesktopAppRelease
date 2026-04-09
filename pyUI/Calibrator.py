@@ -1,5 +1,8 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
+import os
+import re
+os.environ["PETOI_SHOW_GUI"] = "1"
 from PetoiRobot import *
 
 language = languageList['English']
@@ -71,6 +74,10 @@ parameterMacSet = {
 
 frontJointIdx = [4, 5, 8, 9, 12, 13]
 
+# BiBoard products use firmware strings like "B10_..."; wire diagrams are Model<digit>_Wire.jpeg (digit from version[1]).
+# NyBoard products (Bittle, Nybble) always use Model_Wire.jpeg. From the Model menu, BiBoard trio uses digit 1 (same as boardVersion[1]=='1').
+WIRE_BIBOARD_MODELS = frozenset({'BittleX', 'BittleX+Arm', 'NybbleQ'})
+
 def txt(key):
     return language.get(key, textEN[key])
     
@@ -90,55 +97,310 @@ class Calibrator:
         self.configName = config.model_
         self.boardVersion = config.version_
         config.model_ = config.model_.replace(' ', '')
-        if config.model_ == 'BittleX':
-            self.model = 'Bittle'
-        elif config.model_ == 'BittleX+Arm':
-            self.model = 'BittleX+Arm'
-        elif config.model_ == 'NybbleQ':
-            self.model = 'Nybble'
-        elif config.model_ == 'Chero':
-            self.model = 'Chero'
-        else:
-            self.model = config.model_
+        self._derive_ui_model()
+
+        # Load configuration from file (same pattern as Debugger — for menu Model / Language persistence)
+        try:
+            with open(defaultConfPath, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            lines = [line.split('\n')[0] for line in lines]
+            self.defaultLan = lines[0]
+            self.defaultPath = lines[2]
+            self.defaultSwVer = lines[3]
+            self.defaultBdVer = lines[4]
+            self.defaultMode = lines[5]
+            if len(lines) >= 8:
+                self.defaultCreator = lines[6]
+                self.defaultLocation = lines[7]
+            else:
+                self.defaultCreator = txt('Nature')
+                self.defaultLocation = txt('Earth')
+            self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
+                                  self.defaultMode, self.defaultCreator, self.defaultLocation]
+        except Exception:
+            self.defaultLan = 'English'
+            self.defaultPath = releasePath[:-1]
+            self.defaultSwVer = '2.0'
+            self.defaultBdVer = NyBoard_version
+            self.defaultMode = 'Standard'
+            self.defaultCreator = txt('Nature')
+            self.defaultLocation = txt('Earth')
+            self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
+                                  self.defaultMode, self.defaultCreator, self.defaultLocation]
 
         self.winCalib = Tk()
         self.winCalib.title(txt('calibTitle'))
         self.winCalib.geometry('+200+100')
-        self.winCalib.resizable(False, False)
+        self.winCalib.resizable(True, True)
+        self._resize_job = None
+        self._slider_resize_meta = []
+        self._basis_size = None
+        self._live_image_w = None
+        self._last_center_img_sig = None
+        self._current_posture_suffix = '_Ruler.jpeg'
         self.calibSliders = list()
+        self._jointLabels = []
+        self.autoCalibButton = None
         self.OSname = self.winCalib.call('tk', 'windowingsystem')
         if self.OSname == 'win32':
             self.winCalib.iconbitmap(resourcePath + 'Petoi.ico')
             self.calibButtonW = 8
         else:
             self.calibButtonW = 4
+        self.createMenu()
+        self._build_calibration_ui()
+        time.sleep(3) # wait for the robot to reboot
+        self.calibFun('c')
+        self.winCalib.update()
+        self.calibratorReady = True
+        self.winCalib.protocol('WM_DELETE_WINDOW', self.closeCalib)
+        self.winCalib.focus_force()    # force the main interface to get focus
+        self.winCalib.mainloop()
+
+    @staticmethod
+    def _model_menu_key_equals(a, b):
+        return (a or "").replace(" ", "") == (b or "").replace(" ", "")
+
+    def _derive_ui_model(self):
+        m = config.model_
+        if m == "BittleX":
+            self.model = "Bittle"
+        elif m == "BittleX+Arm":
+            self.model = "BittleX+Arm"
+        elif m == "NybbleQ":
+            self.model = "Nybble"
+        elif m == "Chero":
+            self.model = "Chero"
+        else:
+            self.model = m
+
+    def _tear_down_calibration_ui(self):
+        if self._resize_job is not None:
+            try:
+                self.winCalib.after_cancel(self._resize_job)
+            except Exception:
+                pass
+            self._resize_job = None
+        try:
+            self.winCalib.unbind('<Configure>')
+        except Exception:
+            pass
+        self._slider_resize_meta = []
+        self._basis_size = None
+        self._live_image_w = None
+        self._last_center_img_sig = None
+        for w in list(self.calibSliders):
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self.calibSliders = []
+        for w in list(self._jointLabels):
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self._jointLabels = []
+        if self.autoCalibButton is not None:
+            try:
+                self.autoCalibButton.destroy()
+            except Exception:
+                pass
+            self.autoCalibButton = None
+        if getattr(self, "frameCalibButtons", None) is not None:
+            try:
+                self.frameCalibButtons.destroy()
+            except Exception:
+                pass
+            self.frameCalibButtons = None
+
+    def _adjust_window_geometry_for_model(self):
+        self.winCalib.update_idletasks()
+        rw = self.winCalib.winfo_reqwidth()
+        rh = self.winCalib.winfo_reqheight()
+        if self.model == "BittleX+Arm":
+            rh += 3
+        self.winCalib.geometry(f"{rw}x{rh}+200+100")
+        self._basis_size = (rw, rh)
+
+    def _configure_responsive_grid(self):
+        """Center column grows with the window; only top content rows expand vertically (no huge grey footer)."""
+        w = self.winCalib
+        pad = 12
+        img_floor = int(self.parameterSet['imageW']) + pad
+        if self.model == 'Chero':
+            for c in range(5):
+                w.grid_columnconfigure(c, weight=1, minsize=0)
+            w.grid_columnconfigure(2, weight=3, minsize=max(180, img_floor))
+        else:
+            for c in range(7):
+                w.grid_columnconfigure(c, weight=1, minsize=0)
+            w.grid_columnconfigure(3, weight=3, minsize=max(200, img_floor))
+        for r in range(14):
+            w.grid_rowconfigure(r, weight=1)
+        for r in range(14, 28):
+            w.grid_rowconfigure(r, weight=0)
+
+    def _configure_center_frame_rows(self):
+        """Let wiring and posture bands share extra vertical space inside the center frame."""
+        f = self.frameCalibButtons
+        for r in range(14):
+            f.grid_rowconfigure(r, weight=0)
+        if self.model == 'Chero':
+            for r in range(0, 5):
+                f.grid_rowconfigure(r, weight=1)
+            f.grid_rowconfigure(7, weight=0)
+            for r in range(8, 11):
+                f.grid_rowconfigure(r, weight=1)
+        else:
+            for r in range(0, 5):
+                f.grid_rowconfigure(r, weight=1)
+            f.grid_rowconfigure(6, weight=0)
+            for r in range(7, 10):
+                f.grid_rowconfigure(r, weight=1)
+
+    def _apply_photo_contain(self, label, path, max_w, max_h):
+        """Scale image to fit inside max_w x max_h without cropping or distortion."""
+        max_w = max(40, int(max_w))
+        max_h = max(40, int(max_h))
+        img = Image.open(path)
+        sw, sh = img.size
+        if sw <= 0 or sh <= 0:
+            return
+        scale = min(max_w / sw, max_h / sh)
+        nw = max(1, int(sw * scale))
+        nh = max(1, int(sh * scale))
+        try:
+            resample = Image.Resampling.LANCZOS
+        except AttributeError:
+            resample = Image.LANCZOS
+        img2 = img.resize((nw, nh), resample)
+        photo = ImageTk.PhotoImage(img2)
+        label.config(image=photo)
+        label.image = photo
+
+    def _apply_photo_fill(self, label, path, target_w, target_h):
+        """Resize image to exactly target_w x target_h (may stretch) to fill the wiring diagram area."""
+        target_w = max(40, int(target_w))
+        target_h = max(40, int(target_h))
+        img = Image.open(path)
+        try:
+            resample = Image.Resampling.LANCZOS
+        except AttributeError:
+            resample = Image.LANCZOS
+        img2 = img.resize((target_w, target_h), resample)
+        photo = ImageTk.PhotoImage(img2)
+        label.config(image=photo)
+        label.image = photo
+
+    def _relayout_center_panel_images(self):
+        """Resize wiring + posture images from the actual center frame size (grows when the window grows)."""
+        self.winCalib.update_idletasks()
+        try:
+            # Tight margins; wiring uses stretch-fill, posture uses contain.
+            fw = max(40, self.frameCalibButtons.winfo_width() - 4)
+            fh = max(70, self.frameCalibButtons.winfo_height() - 64)
+        except Exception:
+            return
+        if fw < 50 or fh < 70:
+            return
+        sig = (fw, fh)
+        if self._last_center_img_sig is not None:
+            pfw, pfh = self._last_center_img_sig
+            if abs(pfw - fw) < 5 and abs(pfh - fh) < 5:
+                return
+        self._last_center_img_sig = sig
+        # Wiring: stretch to fill its cell (distortion OK); posture stays contain. Slightly more height for wiring vs 58%.
+        gap = 4
+        h_top = max(86, int(fh * 0.66))
+        h_bot = max(82, fh - h_top - gap)
+        try:
+            if getattr(self, '_wire_image_path', None):
+                self._apply_photo_fill(self.imgWiring, self._wire_image_path, fw, h_top)
+                self._wire_photo_ref = self.imgWiring.image
+            suff = getattr(self, '_current_posture_suffix', '_Ruler.jpeg')
+            self._apply_photo_contain(self.imgPosture, resourcePath + self.model + suff, fw, h_bot)
+            self._posture_photo_ref = self.imgPosture.image
+            self._live_image_w = fw
+        except Exception:
+            pass
+
+    def _on_calib_configure(self, event):
+        if event.widget != self.winCalib:
+            return
+        if self._resize_job is not None:
+            try:
+                self.winCalib.after_cancel(self._resize_job)
+            except Exception:
+                pass
+        self._resize_job = self.winCalib.after(90, self._apply_calibration_resize)
+
+    def _apply_calibration_resize(self):
+        self._resize_job = None
+        if not self.calibSliders or self._basis_size is None:
+            return
+        try:
+            ww = self.winCalib.winfo_width()
+            wh = self.winCalib.winfo_height()
+        except Exception:
+            return
+        if ww < 80 or wh < 80:
+            return
+        bw, bh = self._basis_size
+        sx = max(0.55, min(2.35, ww / max(bw, 1)))
+        sy = max(0.55, min(2.35, wh / max(bh, 1)))
+        for meta in self._slider_resize_meta:
+            try:
+                if meta['orient'] == HORIZONTAL:
+                    nl = int(meta['base_len'] * sx)
+                    nl = max(meta['min_len'], min(nl, 520))
+                else:
+                    nl = int(meta['base_len'] * sy)
+                    nl = max(meta['min_len'], min(nl, 720))
+                meta['widget'].config(length=nl)
+            except Exception:
+                pass
+        self._relayout_center_panel_images()
+
+    def _build_calibration_ui(self, model_from_menu=False):
+        self.calibSliders = []
+        self._jointLabels = []
+        self.autoCalibButton = None
+        self._slider_resize_meta = []
+        self._current_posture_suffix = '_Ruler.jpeg'
         self.frameCalibButtons = Frame(self.winCalib)
         # For Chero, position the button frame to avoid overlap with horizontal sliders
         if self.model == 'Chero':
-            self.frameCalibButtons.grid(row=0, column=2, rowspan=14)  # Column 2 (middle) - increased by 1
+            self.frameCalibButtons.grid(row=0, column=2, rowspan=14, sticky='nsew')
         else:
-            self.frameCalibButtons.grid(row=0, column=3, rowspan=13)  # Original position - increased by 1
-        calibButton = Button(self.frameCalibButtons, text=txt('Calibrate'), fg = 'blue', width=self.calibButtonW,command=lambda cmd='c': self.calibFun(cmd))
-        standButton = Button(self.frameCalibButtons, text=txt('Stand Up'), fg = 'blue', width=self.calibButtonW, command=lambda cmd='balance': self.calibFun(cmd))
-        restButton = Button(self.frameCalibButtons, text=txt('Rest'),fg = 'blue', width=self.calibButtonW, command=lambda cmd='d': self.calibFun(cmd))
-        walkButton = Button(self.frameCalibButtons, text=txt('Walk'),fg = 'blue', width=self.calibButtonW, command=lambda cmd='walk': self.calibFun(cmd))
-        saveButton = Button(self.frameCalibButtons, text=txt('Save'),fg = 'blue', width=self.calibButtonW, command=lambda: send(goodPorts, ['s', 0]))
-        abortButton = Button(self.frameCalibButtons, text=txt('Abort'),fg = 'blue', width=self.calibButtonW, command=lambda: send(goodPorts, ['a', 0]))
+            self.frameCalibButtons.grid(row=0, column=3, rowspan=13, sticky='nsew')
+        self.calibButton = Button(self.frameCalibButtons, text=txt('Calibrate'), fg='blue', width=self.calibButtonW,
+                                  command=lambda cmd='c': self.calibFun(cmd))
+        self.standButton = Button(self.frameCalibButtons, text=txt('Stand Up'), fg='blue', width=self.calibButtonW,
+                                  command=lambda cmd='balance': self.calibFun(cmd))
+        self.restButton = Button(self.frameCalibButtons, text=txt('Rest'), fg='blue', width=self.calibButtonW,
+                                 command=lambda cmd='d': self.calibFun(cmd))
+        self.walkButton = Button(self.frameCalibButtons, text=txt('Walk'), fg='blue', width=self.calibButtonW,
+                                 command=lambda cmd='walk': self.calibFun(cmd))
+        self.saveButton = Button(self.frameCalibButtons, text=txt('Save'), fg='blue', width=self.calibButtonW,
+                                 command=lambda: send(goodPorts, ['s', 0]))
+        self.abortButton = Button(self.frameCalibButtons, text=txt('Abort'), fg='blue', width=self.calibButtonW,
+                                  command=lambda: send(goodPorts, ['a', 0]))
 #        quitButton = Button(self.frameCalibButtons, text=txt('Quit'),fg = 'blue', width=self.calibButtonW, command=self.closeCalib)
         if self.model == 'Chero':
-            calibButton.grid(row=7, column=0)
-            restButton.grid(row=7, column=1)
-            standButton.grid(row=7, column=2)
-            walkButton.grid(row=12, column=0)
-            saveButton.grid(row=12, column=1)
-            abortButton.grid(row=12, column=2)
+            self.calibButton.grid(row=7, column=0)
+            self.restButton.grid(row=7, column=1)
+            self.standButton.grid(row=7, column=2)
+            self.walkButton.grid(row=12, column=0)
+            self.saveButton.grid(row=12, column=1)
+            self.abortButton.grid(row=12, column=2)
         else:
-            calibButton.grid(row=6, column=0)
-            restButton.grid(row=6, column=1)
-            standButton.grid(row=6, column=2)
-            walkButton.grid(row=11, column=0)
-            saveButton.grid(row=11, column=1)
-            abortButton.grid(row=11, column=2)
+            self.calibButton.grid(row=6, column=0)
+            self.restButton.grid(row=6, column=1)
+            self.standButton.grid(row=6, column=2)
+            self.walkButton.grid(row=11, column=0)
+            self.saveButton.grid(row=11, column=1)
+            self.abortButton.grid(row=11, column=2)
 #        quitButton.grid(row=11, column=2)
 
         self.OSname = self.winCalib.call('tk', 'windowingsystem')
@@ -149,7 +411,6 @@ class Calibrator:
             self.parameterSet = parameterMacSet[self.model]
 
         if self.model == 'BittleX+Arm':
-            # self.parameterSet = parameterSet['BittleX+Arm']
             scaleNames = BittleRScaleNames
         elif self.model == 'Chero':
             # For Chero, use RegularScaleNames but only show 6 joints
@@ -157,24 +418,34 @@ class Calibrator:
         else:
             # self.parameterSet = parameterSet['Regular']
             scaleNames = RegularScaleNames
+        self._scaleNames = scaleNames
 
-        if "B" in self.boardVersion:
-            self.imgWiring = createImage(self.frameCalibButtons,
-                                         resourcePath + config.model_ + self.boardVersion[1] + '_Wire.jpeg',
-                                         self.parameterSet['imageW'])
+        wire_plain = resourcePath + config.model_ + '_Wire.jpeg'
+        if config.model_ not in WIRE_BIBOARD_MODELS:
+            wire_path = wire_plain
+        elif model_from_menu:
+            wire_path = resourcePath + config.model_ + '1' + '_Wire.jpeg'
+        elif "B" in self.boardVersion and len(self.boardVersion) > 1:
+            wire_path = resourcePath + config.model_ + self.boardVersion[1] + '_Wire.jpeg'
         else:
-            self.imgWiring = createImage(self.frameCalibButtons,
-                                         resourcePath + config.model_ + '_Wire.jpeg',
-                                         self.parameterSet['imageW'])
+            wire_path = wire_plain
+        self._wire_image_path = wire_path
+        self.imgWiring = createImage(self.frameCalibButtons, wire_path, self.parameterSet['imageW'])
 
-        self.imgWiring.grid(row=0, column=0, rowspan=5, columnspan=3)
+        self.imgWiring.grid(row=0, column=0, rowspan=5, columnspan=3, sticky='nsew')
+        self.imgWiring.configure(anchor='center')
         Hovertip(self.imgWiring, txt('tipImgWiring'))
 
         self.imgPosture = createImage(self.frameCalibButtons, resourcePath + self.model + '_Ruler.jpeg', self.parameterSet['imageW'])
+        self._posture_photo_ref = self.imgPosture.image
+        self.imgPosture.configure(anchor='center')
+        for c in range(3):
+            self.frameCalibButtons.grid_columnconfigure(c, weight=1)
         if self.model == 'Chero':
-            self.imgPosture.grid(row=8, column=0, rowspan=3, columnspan=3)
+            self.imgPosture.grid(row=8, column=0, rowspan=3, columnspan=3, sticky='nsew')
         else:
-            self.imgPosture.grid(row=7, column=0, rowspan=3, columnspan=3)
+            self.imgPosture.grid(row=7, column=0, rowspan=3, columnspan=3, sticky='nsew')
+        self._configure_center_frame_rows()
 
         # For Chero, show only 6 joints; for others, show 16 joints
         if self.model == 'Chero':
@@ -265,11 +536,17 @@ class Calibrator:
                     ORI = VERTICAL
                     LEN = self.parameterSet['sliderLen']
                     # ALIGN = 'sw'
-            stt = NORMAL
             if i in NaJoints[self.model]:
                 clr = 'light yellow'
+                stt = DISABLED  # N/A joints: show position but do not allow dragging
             else:
                 clr = 'yellow'
+                stt = NORMAL
+
+            if ORI == HORIZONTAL:
+                sticky_label, sticky_scale = 'ew', 'ew'
+            else:
+                sticky_label, sticky_scale = 'n', 'ns'
             
             # Set side labels
             if self.model == 'Chero':
@@ -288,6 +565,7 @@ class Calibrator:
                     
             label = Label(self.winCalib,
                           text=sideLabel + '(' + str(i) + ')\n' + txt(scaleNames[i]))
+            self._jointLabels.append(label)
 
             value = DoubleVar()
             if i in frontJointIdx:
@@ -304,36 +582,159 @@ class Calibrator:
                                   length=LEN, tickinterval=10, resolution=1, repeatdelay=100, repeatinterval=100,
                                   command=lambda value, idx=i: self.setCalib(idx, value))
             self.calibSliders.append(sliderBar)
+            self._slider_resize_meta.append({
+                'widget': sliderBar,
+                'orient': ORI,
+                'base_len': LEN,
+                'min_len': 48,
+            })
             
             # Special layout handling for Chero
             if self.model == 'Chero':
                 if i < 2:  # Horizontal sliders (Head Pan/Tilt) - use cSPAN=2 like SkillComposer
-                    label.grid(row=ROW, column=COL, columnspan=cSPAN, pady=2, sticky=ALIGN)
+                    label.grid(row=ROW, column=COL, columnspan=cSPAN, pady=2, sticky=sticky_label)
                 else:  # Vertical sliders - use columnspan=1 to prevent overlap
-                    label.grid(row=ROW, column=COL, columnspan=1, pady=2, sticky=ALIGN)
+                    label.grid(row=ROW, column=COL, columnspan=1, pady=2, sticky=sticky_label)
             elif i == 2 and scaleNames == BittleRScaleNames:
-                autoCalibButton = Button(self.winCalib, text=txt('Auto'), fg='blue',
-                                         width=self.calibButtonW, command=lambda cmd='c-2': self.calibFun(cmd))
+                self.autoCalibButton = Button(self.winCalib, text=txt('Auto'), fg='blue',
+                                                width=self.calibButtonW, command=lambda cmd='c-2': self.calibFun(cmd))
                 label.grid(row=ROW, column=COL, columnspan=2, pady=2, sticky='e')
-                autoCalibButton.grid(row=ROW, column=COL+2,  pady=2, sticky='w')    # padx=5,
+                self.autoCalibButton.grid(row=ROW, column=COL + 2, pady=2, sticky='w')
             else:
-                label.grid(row=ROW, column=COL, columnspan=cSPAN, pady=2, sticky=ALIGN)
-            sliderBar.grid(row=ROW + 1, column=COL, rowspan=rSPAN, columnspan=cSPAN, sticky=ALIGN)
-        time.sleep(3) # wait for the robot to reboot
-        self.calibFun('c')
+                label.grid(row=ROW, column=COL, columnspan=cSPAN, pady=2, sticky=sticky_label)
+            sliderBar.grid(row=ROW + 1, column=COL, rowspan=rSPAN, columnspan=cSPAN, sticky=sticky_scale)
+        self._adjust_window_geometry_for_model()
+        self._configure_responsive_grid()
+        self.winCalib.update_idletasks()
+        self._last_center_img_sig = None
+        self._current_posture_suffix = '_Ruler.jpeg'
+        self._relayout_center_panel_images()
+        self.winCalib.bind('<Configure>', self._on_calib_configure)
+
+        def _deferred_center_relayout():
+            self._last_center_img_sig = None
+            self._relayout_center_panel_images()
+
+        self.winCalib.after(120, _deferred_center_relayout)
+        bw, bh = self._basis_size
+        img_min = max(200, int(self.parameterSet['imageW']) + 16)
+        min_w = max(680, int(bw * 0.58), img_min + 340)
+        self.winCalib.minsize(min_w, max(360, int(bh * 0.58)))
+        self.winCalib.update_idletasks()
+        rw2 = self.winCalib.winfo_reqwidth()
+        rh2 = self.winCalib.winfo_reqheight()
+        if rw2 > bw or rh2 > bh:
+            self.winCalib.geometry(f"{rw2}x{rh2}+200+100")
+            self._basis_size = (rw2, rh2)
+
+    def createMenu(self):
+        self.menubar = Menu(self.winCalib, background='#ff8000', foreground='black', activebackground='white',
+                            activeforeground='black')
+        file_menu = Menu(self.menubar, tearoff=0, background='#ffcc99', foreground='black')
+        for m in modelOptions:
+            file_menu.add_command(label=m, command=lambda model=m: self.changeModel(model))
+        self.menubar.add_cascade(label=txt('Model'), menu=file_menu)
+
+        lan_menu = Menu(self.menubar, tearoff=0)
+        for l in languageList:
+            lan_menu.add_command(label=languageList[l]['lanOption'], command=lambda lanChoice=l: self.changeLan(lanChoice))
+        self.menubar.add_cascade(label=txt('lanMenu'), menu=lan_menu)
+
+        help_menu = Menu(self.menubar, tearoff=0)
+        help_menu.add_command(label=txt('About'), command=self.showAbout)
+        self.menubar.add_cascade(label=txt('Help'), menu=help_menu)
+
+        self.winCalib.config(menu=self.menubar)
+
+    def changeModel(self, modelName):
+        if not self.calibratorReady:
+            return
+        if self._model_menu_key_equals(modelName, self.configName):
+            return
+        self.calibratorReady = False
+        self.configName = modelName
+        config.model_ = modelName.replace(" ", "")
+        self._derive_ui_model()
+        self.saveConfig(defaultConfPath)
+        self._tear_down_calibration_ui()
+        self._build_calibration_ui(model_from_menu=True)
+        try:
+            self.calibFun("c")
+        except Exception as e:
+            logger.error("calibFun after model switch: %s", e)
         self.winCalib.update()
         self.calibratorReady = True
-        self.winCalib.protocol('WM_DELETE_WINDOW', self.closeCalib)
-        self.winCalib.focus_force()    # force the main interface to get focus
-        self.winCalib.mainloop()
+
+    def changeLan(self, l):
+        global language
+        if self.calibratorReady and txt('lan') != l:
+            language = copy.deepcopy(languageList[l])
+            self.defaultLan = l
+            self.menubar.destroy()
+            self.createMenu()
+            self.winCalib.title(txt('calibTitle'))
+            self.calibButton.config(text=txt('Calibrate'))
+            self.standButton.config(text=txt('Stand Up'))
+            self.restButton.config(text=txt('Rest'))
+            self.walkButton.config(text=txt('Walk'))
+            self.saveButton.config(text=txt('Save'))
+            self.abortButton.config(text=txt('Abort'))
+            if self.autoCalibButton is not None:
+                self.autoCalibButton.config(text=txt('Auto'))
+            self._refreshJointLabelTexts()
+            Hovertip(self.imgWiring, txt('tipImgWiring'))
+            Hovertip(self.imgPosture, txt('tipImgPosture'))
+            self.saveConfig(defaultConfPath)
+
+    def _refreshJointLabelTexts(self):
+        for i, label in enumerate(self._jointLabels):
+            if self.model == 'Chero':
+                if i in range(2, 6):
+                    dof16_index = i + 6
+                    side_label = txt(sideNames[dof16_index % 8]) + '\n'
+                else:
+                    side_label = ''
+            else:
+                if i in range(8, 12):
+                    side_label = txt(sideNames[i % 8]) + '\n'
+                else:
+                    side_label = ''
+            sn = self._scaleNames[i]
+            label.config(text=side_label + '(' + str(i) + ')\n' + txt(sn))
+
+    def showAbout(self):
+        messagebox.showinfo(txt('titleVersion'), txt('msgVersion'))
+        self.winCalib.focus_force()
+
+    def saveConfig(self, filename):
+        self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
+                              self.defaultMode, self.configuration[6], self.configuration[7]]
+        saveConfigToFile(self.configuration, filename)
+
+    def _set_posture_image(self, filename_suffix):
+        """Swap posture JPEG and rescale both center images to the current frame (same as window resize)."""
+        self._current_posture_suffix = filename_suffix
+        self._last_center_img_sig = None
+        self._relayout_center_panel_images()
+
+    def _calibration_offset_numbers(self, offsets_text):
+        """Pick the substring of parsed numbers that correspond to calibration offsets (Chero is 6-DOF, format varies)."""
+        numeric_matches = re.findall(r'-?\d+(?:\.\d+)?', offsets_text)
+        if self.model == 'Chero':
+            n = len(numeric_matches)
+            if n >= 32:
+                return numeric_matches[16:22]
+            if n >= 12:
+                return numeric_matches[6:12]
+            if n >= 6:
+                return numeric_matches[:6]
+            return numeric_matches
+        return numeric_matches[self.numJoints:]
 
     def calibFun(self, cmd):
 #        global ports
-        imageW = self.parameterSet['imageW']
-
-        self.imgPosture.destroy()
         if cmd == 'c' or cmd == 'c-2':
-            self.imgPosture = createImage(self.frameCalibButtons, resourcePath + self.model + '_Ruler.jpeg', imageW)
+            self._set_posture_image('_Ruler.jpeg')
             if cmd == 'c-2':
                 send(goodPorts, ['c', [-2], 0])
                 time.sleep(1)
@@ -346,13 +747,8 @@ class Calibrator:
                 offsets = result[1]
                 print("Raw result:", offsets)
                 
-                # Better parsing logic for calibration data
-                # Look for numeric patterns in the data
-                import re
-                # Extract all numeric values (including negative numbers)
-                numeric_matches = re.findall(r'-?\d+(?:\.\d+)?', offsets)
-                # remove the first self.numJoints values
-                numeric_matches = numeric_matches[self.numJoints:]
+                # Calibration dump: 16-DOF uses 16 pose-related numbers then 16 offsets; Chero may use 6+6 or 6 only.
+                numeric_matches = self._calibration_offset_numbers(offsets)
                 # print("numeric_matches:", numeric_matches)
 
                 # Filter out values that are clearly not joint offsets
@@ -404,27 +800,28 @@ class Calibrator:
                     for i in range(min(16, len(self.calibSliders), len(offsets))):
                         self.calibSliders[i].set(offsets[i])
         elif cmd == 'd':
-            self.imgPosture = createImage(self.frameCalibButtons, resourcePath + self.model + '_Rest.jpeg', imageW)
+            self._set_posture_image('_Rest.jpeg')
             send(goodPorts, ['d', 0])
         elif cmd == 'balance':
-            self.imgPosture = createImage(self.frameCalibButtons, resourcePath + self.model + '_Stand.jpeg', imageW)
+            self._set_posture_image('_Stand.jpeg')
             send(goodPorts, ['kbalance', 0])
         elif cmd == 'walk':
-            self.imgPosture = createImage(self.frameCalibButtons, resourcePath + self.model + '_Walk.jpeg', imageW)
+            self._set_posture_image('_Walk.jpeg')
             send(goodPorts, ['kwkF', 0])
 
         if self.model == 'Chero':
-            self.imgPosture.grid(row=8, column=0, rowspan=3, columnspan=3)
+            self.imgPosture.grid(row=8, column=0, rowspan=3, columnspan=3, sticky='nsew')
         else:
-            self.imgPosture.grid(row=7, column=0, rowspan=3, columnspan=3)
+            self.imgPosture.grid(row=7, column=0, rowspan=3, columnspan=3, sticky='nsew')
 
         Hovertip(self.imgPosture, txt('tipImgPosture'))
         self.winCalib.update()
 
     def setCalib(self, idx, value):
-        if self.calibratorReady:
-            value = int(value)
-            send(goodPorts, ['c', [idx, value], 0])
+        if not self.calibratorReady or idx in NaJoints[self.model]:
+            return
+        value = int(value)
+        send(goodPorts, ['c', [idx, value], 0])
 
     def closeCalib(self):
         confirm = messagebox.askyesnocancel(title=None, message=txt('Do you want to save the offsets?'),
@@ -443,7 +840,9 @@ class Calibrator:
             os._exit(0)
             
 if __name__ == '__main__':
-    goodPorts = {}
+    # Do not reassign goodPorts: `from PetoiRobot import *` binds the same dict as ardSerial.goodPorts;
+    # smartConnectPorts()/testPort populate that shared dict. If `goodPorts = {}` ran here, this module's
+    # name would point at an empty dict and send(goodPorts, ...) would always see len==0 (no serial I/O).
     try:
         #        time.sleep(2)
         #        if len(goodPorts)>0:
