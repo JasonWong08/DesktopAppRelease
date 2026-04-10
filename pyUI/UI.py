@@ -218,8 +218,9 @@ class UI:
         window.mainloop()
 
     def showAbout(self):
-        messagebox.showinfo('Petoi Desktop App',
-                            u'Petoi Desktop App\nOpen Source on GitHub\nCopyright © Petoi LLC\nwww.petoi.com')
+        # messagebox.showinfo('Petoi Desktop App',
+        #                     u'Petoi Desktop App\nOpen Source on GitHub\nCopyright © Petoi LLC\nwww.petoi.com')
+        messagebox.showinfo(txt('titleVersion'), txt('msgVersion'))
         self.window.focus_force()
 
     def on_closing(self):
