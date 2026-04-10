@@ -394,12 +394,6 @@ class SkillComposer:
 
         self.window.config(menu=self.menubar)
 
-    def scheduler(self):
-        print('Scheduler')
-
-    def uploadFirmware(self):
-        print('Uploader')
-        Uploader()
 
     def createController(self):
         self.frameController = Frame(self.window)
