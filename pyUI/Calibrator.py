@@ -62,6 +62,7 @@ parameterWinSet = {
     "BittleX+Arm": BittleRWinSet,
     "DoF16": RegularWinSet,
     "Chero": CheroWinSet,
+    "Mini": CheroWinSet,
 }
 
 parameterMacSet = {
@@ -70,6 +71,7 @@ parameterMacSet = {
     "BittleX+Arm": BittleRMacSet,
     "DoF16": RegularMacSet,
     "Chero": CheroMacSet,
+    "Mini": CheroMacSet,
 }
 
 frontJointIdx = [4, 5, 8, 9, 12, 13]
@@ -412,9 +414,9 @@ class Calibrator:
 
         if self.model == 'BittleX+Arm':
             scaleNames = BittleRScaleNames
-        elif self.model == 'Chero':
-            # For Chero, use RegularScaleNames but only show 6 joints
-            scaleNames = RegularScaleNames
+        elif self.is6dof:
+            # For Chero-like, use 6-DoF names
+            scaleNames = DoF6ScaleNames
         else:
             # self.parameterSet = parameterSet['Regular']
             scaleNames = RegularScaleNames
@@ -447,14 +449,14 @@ class Calibrator:
             self.imgPosture.grid(row=7, column=0, rowspan=3, columnspan=3, sticky='nsew')
         self._configure_center_frame_rows()
 
-        # For Chero, show only 6 joints; for others, show 16 joints
-        if self.model == 'Chero':
+        # For 6-DoF models, show 6 joints; otherwise 16
+        if self.is6dof:
             self.numJoints = 6
         else:
             self.numJoints = 16
 
         for i in range(self.numJoints):
-            if self.model == 'Chero':
+            if self.is6dof:
                 # Chero layout: joints 0,1 horizontal, joints 2,3,4,5 vertical (like DoF16 joints 8,9,10,11)
                 if i < 2:  # Joints 0, 1 - horizontal
                     tickDirection = 1
@@ -549,8 +551,8 @@ class Calibrator:
                 sticky_label, sticky_scale = 'n', 'ns'
             
             # Set side labels
-            if self.model == 'Chero':
-                # For Chero, joints 2,3,4,5 should have side labels corresponding to DoF16 joints 8,9,10,11
+            if self.is6dof:
+                # For 6-DoF models, joints 2,3,4,5 should have side labels corresponding to DoF16 joints 8,9,10,11
                 if i in range(2, 6):  # Joints 2,3,4,5
                     # Map Chero joints 2,3,4,5 to DoF16 joints 8,9,10,11 labels
                     dof16_index = i + 6  # 2->8, 3->9, 4->10, 5->11
@@ -589,8 +591,8 @@ class Calibrator:
                 'min_len': 48,
             })
             
-            # Special layout handling for Chero
-            if self.model == 'Chero':
+            # Special layout handling for 6-DoF models
+            if self.is6dof:
                 if i < 2:  # Horizontal sliders (Head Pan/Tilt) - use cSPAN=2 like SkillComposer
                     label.grid(row=ROW, column=COL, columnspan=cSPAN, pady=2, sticky=sticky_label)
                 else:  # Vertical sliders - use columnspan=1 to prevent overlap
@@ -792,8 +794,8 @@ class Calibrator:
                 else:
                     self.calibSliders[2].set(offsets[2])
             else:
-                # For Chero, only set offsets for 6 joints; for others, set all 16
-                if self.model == 'Chero':
+                # For 6-DoF models, only set offsets for 6 joints; for others, set all 16
+                if self.is6dof:
                     for i in range(min(6, len(self.calibSliders), len(offsets))):
                         self.calibSliders[i].set(offsets[i])
                 else:
