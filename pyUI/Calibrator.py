@@ -138,7 +138,6 @@ class Calibrator:
 #            self.model = 'Nybble'
 #        else:
 #            self.model = config.model_
-        self.is6dof = self.model in ('Chero', 'Mini')
 
         self.winCalib = Tk()
         self.winCalib.title(txt('calibTitle'))
@@ -187,6 +186,7 @@ class Calibrator:
             self.model = "Mini"
         else:
             self.model = m
+        self.is6dof = self.model in ("Chero", "Mini")
 
     def _tear_down_calibration_ui(self):
         if self._resize_job is not None:
@@ -221,6 +221,20 @@ class Calibrator:
             except Exception:
                 pass
             self.autoCalibButton = None
+        for attr in ("imgWiring", "imgPosture"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+        if getattr(self, "frameCalibMid", None) is not None:
+            try:
+                self.frameCalibMid.destroy()
+            except Exception:
+                pass
+            self.frameCalibMid = None
         if getattr(self, "frameCalibButtons", None) is not None:
             try:
                 self.frameCalibButtons.destroy()
@@ -249,29 +263,20 @@ class Calibrator:
         else:
             for c in range(7):
                 w.grid_columnconfigure(c, weight=1, minsize=0)
-            w.grid_columnconfigure(3, weight=3, minsize=max(200, img_floor))
-        for r in range(14):
-            w.grid_rowconfigure(r, weight=1)
-        for r in range(14, 28):
+            # Heavier center column so wiring/ruler JPEGs get more width when the window grows.
+            w.grid_columnconfigure(3, weight=5, minsize=max(220, img_floor + 20))
+        # Rows 0–1: top horizontal sliders. Rows 2–13: image stack (wiring / Calibrate row / posture).
+        # Row 14: Walk/Save/Abort + bottom horizontal sliders (side columns).
+        cal_mid = getattr(self, "_calib_mid_row", 7)
+        for r in range(15):
+            if r in (0, 1, 14, cal_mid):
+                w.grid_rowconfigure(r, weight=0)
+            elif 2 <= r <= 13:
+                w.grid_rowconfigure(r, weight=1)
+            else:
+                w.grid_rowconfigure(r, weight=0)
+        for r in range(15, 28):
             w.grid_rowconfigure(r, weight=0)
-
-    def _configure_center_frame_rows(self):
-        """Let wiring and posture bands share extra vertical space inside the center frame."""
-        f = self.frameCalibButtons
-        for r in range(14):
-            f.grid_rowconfigure(r, weight=0)
-        if self.is6dof:
-            for r in range(0, 5):
-                f.grid_rowconfigure(r, weight=1)
-            f.grid_rowconfigure(7, weight=0)
-            for r in range(8, 11):
-                f.grid_rowconfigure(r, weight=1)
-        else:
-            for r in range(0, 5):
-                f.grid_rowconfigure(r, weight=1)
-            f.grid_rowconfigure(6, weight=0)
-            for r in range(7, 10):
-                f.grid_rowconfigure(r, weight=1)
 
     def _apply_photo_contain(self, label, path, max_w, max_h):
         """Scale image to fit inside max_w x max_h without cropping or distortion."""
@@ -308,14 +313,17 @@ class Calibrator:
         label.image = photo
 
     def _relayout_center_panel_images(self):
-        """Resize wiring + posture images from the actual center frame size (grows when the window grows)."""
+        """Resize wiring + posture in main-window image cells (rows 2–13); same target width for both bitmaps."""
         self.winCalib.update_idletasks()
         try:
-            # Tight margins; wiring uses stretch-fill, posture uses contain.
-            fw = max(40, self.frameCalibButtons.winfo_width() - 4)
-            fh = max(70, self.frameCalibButtons.winfo_height() - 64)
+            w1 = self.imgWiring.winfo_width()
+            w2 = self.imgPosture.winfo_width()
+            ih = self.imgWiring.winfo_height() + self.imgPosture.winfo_height()
         except Exception:
             return
+        pad = 4 if self.is6dof else 2
+        fw = max(40, max(w1, w2) - pad)
+        fh = max(70, ih)
         if fw < 50 or fh < 70:
             return
         sig = (fw, fh)
@@ -324,13 +332,18 @@ class Calibrator:
             if abs(pfw - fw) < 5 and abs(pfh - fh) < 5:
                 return
         self._last_center_img_sig = sig
-        # Wiring: stretch to fill its cell (distortion OK); posture stays contain. Slightly more height for wiring vs 58%.
         gap = 4
-        h_top = max(86, int(fh * 0.66))
+        if self.is6dof:
+            h_top = max(86, int(fh * 0.66))
+        else:
+            h_top = max(90, int(fh * 0.52))
         h_bot = max(82, fh - h_top - gap)
         try:
             if getattr(self, '_wire_image_path', None):
-                self._apply_photo_fill(self.imgWiring, self._wire_image_path, fw, h_top)
+                if self.is6dof:
+                    self._apply_photo_fill(self.imgWiring, self._wire_image_path, fw, h_top)
+                else:
+                    self._apply_photo_contain(self.imgWiring, self._wire_image_path, fw, h_top)
                 self._wire_photo_ref = self.imgWiring.image
             suff = getattr(self, '_current_posture_suffix', '_Ruler.jpeg')
             self._apply_photo_contain(self.imgPosture, resourcePath + self.model + suff, fw, h_bot)
@@ -382,35 +395,16 @@ class Calibrator:
         self.autoCalibButton = None
         self._slider_resize_meta = []
         self._current_posture_suffix = '_Ruler.jpeg'
+        self._calib_center_col = 2 if self.is6dof else 3
+        self.frameCalibMid = Frame(self.winCalib)
+        self.calibButton = Button(self.frameCalibMid, text=txt('Calibrate'), fg = 'blue', width=self.calibButtonW,command=lambda cmd='c': self.calibFun(cmd))
+        self.standButton = Button(self.frameCalibMid, text=txt('Stand Up'), fg = 'blue', width=self.calibButtonW, command=lambda cmd='balance': self.calibFun(cmd))
+        self.restButton = Button(self.frameCalibMid, text=txt('Rest'),fg = 'blue', width=self.calibButtonW, command=lambda cmd='d': self.calibFun(cmd))
         self.frameCalibButtons = Frame(self.winCalib)
-
-        # For Chero-like, position the button frame to avoid overlap with horizontal sliders
-        if self.is6dof:
-            self.frameCalibButtons.grid(row=0, column=2, rowspan=16)  # Column 2 (middle)
-        else:
-            self.frameCalibButtons.grid(row=0, column=3, rowspan=15)
-        self.calibButton = Button(self.frameCalibButtons, text=txt('Calibrate'), fg = 'blue', width=self.calibButtonW,command=lambda cmd='c': self.calibFun(cmd))
-        self.standButton = Button(self.frameCalibButtons, text=txt('Stand Up'), fg = 'blue', width=self.calibButtonW, command=lambda cmd='balance': self.calibFun(cmd))
-        self.restButton = Button(self.frameCalibButtons, text=txt('Rest'),fg = 'blue', width=self.calibButtonW, command=lambda cmd='d': self.calibFun(cmd))
         self.walkButton = Button(self.frameCalibButtons, text=txt('Walk'),fg = 'blue', width=self.calibButtonW, command=lambda cmd='walk': self.calibFun(cmd))
         self.saveButton = Button(self.frameCalibButtons, text=txt('Save'),fg = 'blue', width=self.calibButtonW, command=lambda: send(goodPorts, ['s', 0]))
         self.abortButton = Button(self.frameCalibButtons, text=txt('Abort'),fg = 'blue', width=self.calibButtonW, command=lambda: send(goodPorts, ['a', 0]))
 #        quitButton = Button(self.frameCalibButtons, text=txt('Quit'),fg = 'blue', width=self.calibButtonW, command=self.closeCalib)
-        if self.is6dof:
-            self.calibButton.grid(row=7, column=0)
-            self.restButton.grid(row=7, column=1)
-            self.standButton.grid(row=7, column=2)
-            self.walkButton.grid(row=12, column=0)
-            self.saveButton.grid(row=12, column=1)
-            self.abortButton.grid(row=12, column=2)
-        else:
-            self.calibButton.grid(row=6, column=0)
-            self.restButton.grid(row=6, column=1)
-            self.standButton.grid(row=6, column=2)
-            self.walkButton.grid(row=11, column=0)
-            self.saveButton.grid(row=11, column=1)
-            self.abortButton.grid(row=11, column=2)
-#        quitButton.grid(row=11, column=2)
 
         self.OSname = self.winCalib.call('tk', 'windowingsystem')
         print(self.OSname)
@@ -439,22 +433,42 @@ class Calibrator:
         else:
             wire_path = wire_plain
         self._wire_image_path = wire_path
-        self.imgWiring = createImage(self.frameCalibButtons, wire_path, self.parameterSet['imageW'])
+        cc = self._calib_center_col
+        img_w = int(self.parameterSet['imageW'])
+        # Image band: main grid rows 2 .. 13 (second-to-last row); row 14 is walk + bottom sliders.
+        if self.is6dof:
+            self._wiring_rowspan, self._posture_rowspan = 4, 7
+        else:
+            self._wiring_rowspan, self._posture_rowspan = 6, 5
+        self._img_top_row = 2
+        self._img_bottom_row = 13
+        self._calib_mid_row = self._img_top_row + self._wiring_rowspan
+        self._posture_start_row = self._calib_mid_row + 1
+        assert self._posture_start_row + self._posture_rowspan - 1 == self._img_bottom_row
 
-        self.imgWiring.grid(row=0, column=0, rowspan=5, columnspan=3, sticky='nsew')
+        self.imgWiring = createImage(self.winCalib, wire_path, img_w)
+        self.imgWiring.grid(row=self._img_top_row, column=cc, rowspan=self._wiring_rowspan, sticky='nsew')
         self.imgWiring.configure(anchor='center')
         Hovertip(self.imgWiring, txt('tipImgWiring'))
 
-        self.imgPosture = createImage(self.frameCalibButtons, resourcePath + self.model + '_Ruler.jpeg', self.parameterSet['imageW'])
+        self.imgPosture = createImage(self.winCalib, resourcePath + self.model + '_Ruler.jpeg', img_w)
         self._posture_photo_ref = self.imgPosture.image
         self.imgPosture.configure(anchor='center')
+        self.imgPosture.grid(row=self._posture_start_row, column=cc, rowspan=self._posture_rowspan, sticky='nsew')
+
+        for c in range(3):
+            self.frameCalibMid.grid_columnconfigure(c, weight=1)
+        self.frameCalibMid.grid(row=self._calib_mid_row, column=cc, sticky='ew')
+        self.calibButton.grid(row=0, column=0)
+        self.restButton.grid(row=0, column=1)
+        self.standButton.grid(row=0, column=2)
+
         for c in range(3):
             self.frameCalibButtons.grid_columnconfigure(c, weight=1)
-        if self.is6dof:
-            self.imgPosture.grid(row=8, column=0, rowspan=3, columnspan=3, sticky='nsew')
-        else:
-            self.imgPosture.grid(row=7, column=0, rowspan=3, columnspan=3, sticky='nsew')
-        self._configure_center_frame_rows()
+        self.frameCalibButtons.grid(row=14, column=cc, sticky='ew')
+        self.walkButton.grid(row=0, column=0)
+        self.saveButton.grid(row=0, column=1)
+        self.abortButton.grid(row=0, column=2)
 
         # For 6-DoF models, show 6 joints; otherwise 16
         if self.is6dof:
@@ -818,10 +832,12 @@ class Calibrator:
             self._set_posture_image('_Walk.jpeg')
             send(goodPorts, ['kwkF', 0])
 
-        if self.is6dof:
-            self.imgPosture.grid(row=8, column=0, rowspan=3, columnspan=3, sticky='nsew'))
-        else:
-            self.imgPosture.grid(row=7, column=0, rowspan=3, columnspan=3, sticky='nsew')
+        self.imgPosture.grid(
+            row=self._posture_start_row,
+            column=self._calib_center_col,
+            rowspan=self._posture_rowspan,
+            sticky='nsew',
+        )
 
         Hovertip(self.imgPosture, txt('tipImgPosture'))
         self.winCalib.update()
