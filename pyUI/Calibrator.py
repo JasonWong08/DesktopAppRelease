@@ -99,6 +99,7 @@ class Calibrator:
         self.configName = config.model_
         self.boardVersion = config.version_
         config.model_ = config.model_.replace(' ', '')
+# make the model menu
         self._derive_ui_model()
 
         # Load configuration from file (same pattern as Debugger — for menu Model / Language persistence)
@@ -129,6 +130,15 @@ class Calibrator:
             self.defaultLocation = txt('Earth')
             self.configuration = [self.defaultLan, self.configName, self.defaultPath, self.defaultSwVer, self.defaultBdVer,
                                   self.defaultMode, self.defaultCreator, self.defaultLocation]
+#        if config.model_ == 'BittleX':
+#            self.model = 'Bittle'
+#        elif config.model_ == 'BittleX+Arm':
+#            self.model = 'BittleX+Arm'
+#        elif config.model_ == 'NybbleQ':
+#            self.model = 'Nybble'
+#        else:
+#            self.model = config.model_
+        self.is6dof = self.model in ('Chero', 'Mini')
 
         self.winCalib = Tk()
         self.winCalib.title(txt('calibTitle'))
@@ -173,6 +183,8 @@ class Calibrator:
             self.model = "Nybble"
         elif m == "Chero":
             self.model = "Chero"
+        elif m == "Mini":
+            self.model = "Mini"
         else:
             self.model = m
 
@@ -230,7 +242,7 @@ class Calibrator:
         w = self.winCalib
         pad = 12
         img_floor = int(self.parameterSet['imageW']) + pad
-        if self.model == 'Chero':
+        if self.is6dof:
             for c in range(5):
                 w.grid_columnconfigure(c, weight=1, minsize=0)
             w.grid_columnconfigure(2, weight=3, minsize=max(180, img_floor))
@@ -248,7 +260,7 @@ class Calibrator:
         f = self.frameCalibButtons
         for r in range(14):
             f.grid_rowconfigure(r, weight=0)
-        if self.model == 'Chero':
+        if self.is6dof:
             for r in range(0, 5):
                 f.grid_rowconfigure(r, weight=1)
             f.grid_rowconfigure(7, weight=0)
@@ -371,25 +383,20 @@ class Calibrator:
         self._slider_resize_meta = []
         self._current_posture_suffix = '_Ruler.jpeg'
         self.frameCalibButtons = Frame(self.winCalib)
-        # For Chero, position the button frame to avoid overlap with horizontal sliders
-        if self.model == 'Chero':
-            self.frameCalibButtons.grid(row=0, column=2, rowspan=14, sticky='nsew')
+
+        # For Chero-like, position the button frame to avoid overlap with horizontal sliders
+        if self.is6dof:
+            self.frameCalibButtons.grid(row=0, column=2, rowspan=16)  # Column 2 (middle)
         else:
-            self.frameCalibButtons.grid(row=0, column=3, rowspan=13, sticky='nsew')
-        self.calibButton = Button(self.frameCalibButtons, text=txt('Calibrate'), fg='blue', width=self.calibButtonW,
-                                  command=lambda cmd='c': self.calibFun(cmd))
-        self.standButton = Button(self.frameCalibButtons, text=txt('Stand Up'), fg='blue', width=self.calibButtonW,
-                                  command=lambda cmd='balance': self.calibFun(cmd))
-        self.restButton = Button(self.frameCalibButtons, text=txt('Rest'), fg='blue', width=self.calibButtonW,
-                                 command=lambda cmd='d': self.calibFun(cmd))
-        self.walkButton = Button(self.frameCalibButtons, text=txt('Walk'), fg='blue', width=self.calibButtonW,
-                                 command=lambda cmd='walk': self.calibFun(cmd))
-        self.saveButton = Button(self.frameCalibButtons, text=txt('Save'), fg='blue', width=self.calibButtonW,
-                                 command=lambda: send(goodPorts, ['s', 0]))
-        self.abortButton = Button(self.frameCalibButtons, text=txt('Abort'), fg='blue', width=self.calibButtonW,
-                                  command=lambda: send(goodPorts, ['a', 0]))
+            self.frameCalibButtons.grid(row=0, column=3, rowspan=15)
+        self.calibButton = Button(self.frameCalibButtons, text=txt('Calibrate'), fg = 'blue', width=self.calibButtonW,command=lambda cmd='c': self.calibFun(cmd))
+        self.standButton = Button(self.frameCalibButtons, text=txt('Stand Up'), fg = 'blue', width=self.calibButtonW, command=lambda cmd='balance': self.calibFun(cmd))
+        self.restButton = Button(self.frameCalibButtons, text=txt('Rest'),fg = 'blue', width=self.calibButtonW, command=lambda cmd='d': self.calibFun(cmd))
+        self.walkButton = Button(self.frameCalibButtons, text=txt('Walk'),fg = 'blue', width=self.calibButtonW, command=lambda cmd='walk': self.calibFun(cmd))
+        self.saveButton = Button(self.frameCalibButtons, text=txt('Save'),fg = 'blue', width=self.calibButtonW, command=lambda: send(goodPorts, ['s', 0]))
+        self.abortButton = Button(self.frameCalibButtons, text=txt('Abort'),fg = 'blue', width=self.calibButtonW, command=lambda: send(goodPorts, ['a', 0]))
 #        quitButton = Button(self.frameCalibButtons, text=txt('Quit'),fg = 'blue', width=self.calibButtonW, command=self.closeCalib)
-        if self.model == 'Chero':
+        if self.is6dof:
             self.calibButton.grid(row=7, column=0)
             self.restButton.grid(row=7, column=1)
             self.standButton.grid(row=7, column=2)
@@ -443,7 +450,7 @@ class Calibrator:
         self.imgPosture.configure(anchor='center')
         for c in range(3):
             self.frameCalibButtons.grid_columnconfigure(c, weight=1)
-        if self.model == 'Chero':
+        if self.is6dof:
             self.imgPosture.grid(row=8, column=0, rowspan=3, columnspan=3, sticky='nsew')
         else:
             self.imgPosture.grid(row=7, column=0, rowspan=3, columnspan=3, sticky='nsew')
@@ -690,7 +697,7 @@ class Calibrator:
 
     def _refreshJointLabelTexts(self):
         for i, label in enumerate(self._jointLabels):
-            if self.model == 'Chero':
+            if self.is6dof:
                 if i in range(2, 6):
                     dof16_index = i + 6
                     side_label = txt(sideNames[dof16_index % 8]) + '\n'
@@ -722,7 +729,7 @@ class Calibrator:
     def _calibration_offset_numbers(self, offsets_text):
         """Pick the substring of parsed numbers that correspond to calibration offsets (Chero is 6-DOF, format varies)."""
         numeric_matches = re.findall(r'-?\d+(?:\.\d+)?', offsets_text)
-        if self.model == 'Chero':
+        if self.is6dof:
             n = len(numeric_matches)
             if n >= 32:
                 return numeric_matches[16:22]
@@ -811,8 +818,8 @@ class Calibrator:
             self._set_posture_image('_Walk.jpeg')
             send(goodPorts, ['kwkF', 0])
 
-        if self.model == 'Chero':
-            self.imgPosture.grid(row=8, column=0, rowspan=3, columnspan=3, sticky='nsew')
+        if self.is6dof:
+            self.imgPosture.grid(row=8, column=0, rowspan=3, columnspan=3, sticky='nsew'))
         else:
             self.imgPosture.grid(row=7, column=0, rowspan=3, columnspan=3, sticky='nsew')
 
