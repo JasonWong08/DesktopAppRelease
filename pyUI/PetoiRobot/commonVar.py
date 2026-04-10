@@ -140,8 +140,7 @@ modelOptions = [
     'Bittle X',
     'Bittle X+Arm',
     'DoF16',
-    'Chero',
-    'Mini'
+    'Chero'
 ]
 
 NaJoints = {
@@ -150,8 +149,7 @@ NaJoints = {
 #    'BittleX': [1, 2, 3, 4, 5, 6, 7],
     'BittleX+Arm': [3, 4, 5, 6, 7],
     'DoF16' : [],
-    'Chero' : [],
-    'Mini' : []
+    'Chero' : []
 }
 
 BittleRScaleNames = [
@@ -166,19 +164,12 @@ RegularScaleNames = [
     'Arm', 'Arm', 'Arm', 'Arm',
     'Knee', 'Knee', 'Knee', 'Knee']
 
-# For 6-DoF models (Chero / Mini)
-DoF6ScaleNames = [
-    'Head Pan', 'Head Tilt',
-    'Shoulder', 'Shoulder', 'Shoulder', 'Shoulder'
-]
-
 scaleNames = {
     'Nybble': RegularScaleNames,
     'Bittle': RegularScaleNames,
     'BittleX+Arm': BittleRScaleNames,
     'DoF16': RegularScaleNames,
-    'Chero': DoF6ScaleNames,
-    'Mini': DoF6ScaleNames
+    'Chero': RegularScaleNames
 }
 
 sideNames = ['Left Front', 'Right Front', 'Right Back', 'Left Back']

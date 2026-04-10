@@ -63,7 +63,7 @@ def serialWriteNumToByte(port, token, var=None):  # Only to be used for c m u b 
             skillHeader = 7
             
         # Determine frame size based on robot model
-        if hasattr(config, 'model_') and config.model_ and 'Chero' in config.model_ or 'Mini' in config.model_:
+        if hasattr(config, 'model_') and config.model_ and 'Chero' in config.model_:
             maxJoints = 6
         else:
             maxJoints = 16
@@ -309,7 +309,7 @@ def splitTaskForLargeAngles(task):
         indexedList = list()
         if token == 'L':
             # Determine grid size based on robot model
-            if hasattr(config, 'model_') and config.model_ and 'Chero' in config.model_ or 'Mini' in config.model_:
+            if hasattr(config, 'model_') and config.model_ and 'Chero' in config.model_:
                 gridSize = 2  # 2x3 grid for Chero
                 maxJoints = 6
             else:
@@ -537,8 +537,7 @@ postureDict = {
     'Bittle': postureTableBittle,
     'BittleX+Arm': postureTableBittleR,
     'DoF16': postureTableDoF16,
-    'Chero': postureTableDoF6,
-    'Mini': postureTableDoF6
+    'Chero': postureTableDoF6
 }
 
 skillFullName = {
@@ -600,9 +599,6 @@ def schedulerToSkill(ports, testSchedule):
     if hasattr(config, 'model_') and config.model_:
         if 'Chero' in config.model_:
             currentPostureTable = postureDict['Chero']
-            numJoints = 6
-        elif 'Mini' in config.model_:
-            currentPostureTable = postureDict['Mini']
             numJoints = 6
         elif 'Nybble' in config.model_:
             currentPostureTable = postureDict['Nybble']
@@ -668,7 +664,7 @@ def getModelAndVersion(result):
     if result != -1:
         parse = result[1].replace('\r','').split('\n')
         for l in range(len(parse)):
-            if 'Nybble' in parse[l] or 'Bittle' in parse[l] or 'DoF16' in parse[l] or 'Chero' in parse[l] or 'Mini' in parse[l]:
+            if 'Nybble' in parse[l] or 'Bittle' in parse[l] or 'DoF16' in parse[l] or 'Chero' in parse[l]:
                 config.model_ = parse[l]
                 config.version_ = parse [l+1]
                 config.modelList += [config.model_]
@@ -685,8 +681,6 @@ def updatePostureTable():
     if hasattr(config, 'model_') and config.model_:
         if 'Chero' in config.model_:
             postureTable = postureDict['Chero']
-        elif 'Mini' in config.model_:
-            postureTable = postureDict['Mini']
         elif 'Nybble' in config.model_:
             postureTable = postureDict['Nybble']
         elif 'DoF16' in config.model_:
