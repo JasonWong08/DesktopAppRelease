@@ -355,7 +355,10 @@ class SkillComposer:
         self.mirror = False
         self.createMenu()
         self.createController()
-        self.placeProductImage()
+        if config.model_== 'NybbleQ':
+            self.placeProductImage(config.model_)
+        else:
+            self.placeProductImage(self.model)
         self.createDial()
         self.createPosture()
         self.createSkillEditor()
@@ -929,17 +932,14 @@ class SkillComposer:
 
 
 
-    def placeProductImage(self):
+    def placeProductImage(self, model):
         rowFrameImage = self.parameterSet['rowFrameImage']    # The row number of the image frame is located
         imgWidth = self.parameterSet['imgWidth']              # The width of image
         rowSpan = self.parameterSet['imgRowSpan']             # The number of lines occupied by the image frame
 
         # Use model-specific image (Mini has its own copy)
-        if config.model_== 'NybbleQ':
-            imgFile = resourcePath + config.model_ + '.jpeg'
-        else:
-            imgFile = resourcePath + self.model + '.jpeg'
-            
+        imgFile = resourcePath + model + '.jpeg'
+
         # Create image normally
         self.frameImage = self.createImage(self.frameController, imgFile, imgWidth)
         
@@ -1040,9 +1040,11 @@ class SkillComposer:
             model = model.replace(' ', '')
             if 'Bittle' in model and model != "BittleX+Arm": # Bittle or Bittle X will be Bittle
                 model = 'Bittle'
+                self.model = copy.deepcopy(model)
             elif model == 'NybbleQ':
-                model = 'Nybble'
-            self.model = copy.deepcopy(model)
+                self.model = copy.deepcopy('Nybble')
+            else:
+                self.model = copy.deepcopy(model)
             self.is6dof = self.model in ('Chero','Mini')
             self.postureTable = postureDict[self.model]
             self.framePosture.destroy()
@@ -1080,7 +1082,7 @@ class SkillComposer:
 #                 self.binderButton[i * 2 + 1].config(state=stt)
 
             self.createPosture()
-            self.placeProductImage()
+            self.placeProductImage(model)
             self.restartSkillEditor()
 
     def addFrame(self, currentRow):
