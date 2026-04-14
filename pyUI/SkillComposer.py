@@ -224,9 +224,7 @@ class SkillComposer:
             time.sleep(0.01)
         self.configName = config.model_
         config.model_ = config.model_.replace(' ','')
-        if 'BittleX+Arm' in config.model_:
-            self.model = 'BittleX+Arm'
-        elif config.model_== 'BittleX':
+        if config.model_== 'BittleX':
             self.model = 'Bittle'
         elif config.model_== 'NybbleQ':
             self.model = 'Nybble'
@@ -937,7 +935,10 @@ class SkillComposer:
         rowSpan = self.parameterSet['imgRowSpan']             # The number of lines occupied by the image frame
 
         # Use model-specific image (Mini has its own copy)
-        imgFile = resourcePath + self.model + '.jpeg'
+        if config.model_== 'NybbleQ':
+            imgFile = resourcePath + config.model_ + '.jpeg'
+        else:
+            imgFile = resourcePath + self.model + '.jpeg'
             
         # Create image normally
         self.frameImage = self.createImage(self.frameController, imgFile, imgWidth)

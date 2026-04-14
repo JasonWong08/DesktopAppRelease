@@ -95,16 +95,12 @@ class Calibrator:
         self.boardVersion = config.version_
         # printH('boardVersion:', self.boardVersion)
         config.model_ = config.model_.replace(' ', '')
-        norm_model = config.model_
-        if norm_model == 'BittleX':
+        if config.model_ == 'BittleX':
             self.model = 'Bittle'
-        elif norm_model == 'BittleX+Arm':
-            self.model = 'BittleX+Arm'
-        elif norm_model == 'NybbleQ':
+        elif config.model_ == 'NybbleQ':
             self.model = 'Nybble'
         else:
-            self.model = norm_model
-        
+            self.model = config.model_
         self.is6dof = self.model in ('Chero', 'Mini')
 
         self.winCalib = Tk()
@@ -165,7 +161,7 @@ class Calibrator:
             scaleNames = RegularScaleNames
 
         # Use actual model name for images (Mini has its own copies)
-        modelForImage = norm_model
+        modelForImage = config.model_
 
         if "B" in self.boardVersion:
             self.imgWiring = createImage(self.frameCalibButtons,
@@ -180,7 +176,10 @@ class Calibrator:
         self.imgWiring.grid(row=0, column=0, rowspan=5, columnspan=3, sticky='n')
         Hovertip(self.imgWiring, txt('tipImgWiring'))
 
-        self.imgPosture = createImage(self.frameCalibButtons, resourcePath + self.model + '_Ruler.jpeg', self.parameterSet['imageW'])
+        if config.model_ == 'NybbleQ':
+            self.imgPosture = createImage(self.frameCalibButtons, resourcePath + config.model_  + '_Ruler.jpeg', self.parameterSet['imageW'])
+        else:
+            self.imgPosture = createImage(self.frameCalibButtons, resourcePath + self.model + '_Ruler.jpeg', self.parameterSet['imageW'])
         # Middle image between button rows
         self.imgPosture.grid(row=2, column=0, rowspan=3, columnspan=3, sticky='n')
 
