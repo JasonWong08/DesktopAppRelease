@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
 
+import os
+os.environ["PETOI_SHOW_GUI"] = "1"
 from PetoiRobot import *
 from tkinter.colorchooser import askcolor
 

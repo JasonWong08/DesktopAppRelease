@@ -7,6 +7,8 @@
 
 from tkinter import ttk
 import tkinter.font as tkFont
+import os
+os.environ["PETOI_SHOW_GUI"] = "1"
 from PetoiRobot import *
 
 
@@ -724,7 +726,7 @@ class Debugger:
         
         # Update button state
         self.connectBtn.config(text=txt('Connected'), fg='green', relief=SUNKEN, state='normal')
-        # Format: "已连接到+串口设备名称" (without space)
+        # Format: "Connected to" + serial port name (no space)
         connectedText = txt("Connected to")
         self.strStatus.set(f'{connectedText}{portName}')
         
@@ -778,7 +780,7 @@ class Debugger:
                 # Update button state
                 self.connectBtn.config(text=txt('Connect'), fg='red', relief=RAISED)
                 if disconnectedPortName:
-                    # Format: "已断开+串口设备名称" (without space)
+                    # Format: "Disconnected from" + serial port name (no space)
                     disconnectedText = txt("Disconnected from")
                     self.strStatus.set(f'{disconnectedText}{disconnectedPortName}')
                 
@@ -971,7 +973,7 @@ class Debugger:
                 
                 # Update button to show connected state
                 self.connectBtn.config(text=txt('Connected'), fg='green', relief=SUNKEN)
-                # Format: "已连接到+串口设备名称" (without space)
+                # Format: "Connected to" + serial port name (no space)
                 connectedText = txt("Connected to")
                 self.strStatus.set(f'{connectedText}{selectedPortName}')
                 
@@ -1004,7 +1006,7 @@ class Debugger:
                     self.receiveThread.join(timeout=0.5)
                 self.currentPort = None
                 self.connectBtn.config(text=txt('Connect'), fg='red', relief=RAISED)
-                # Format: "已断开+串口设备名称" (without space)
+                # Format: "Disconnected from" + serial port name (no space)
                 disconnectedText = txt("Disconnected from")
                 self.strStatus.set(f'{disconnectedText}{selectedPortName}')
             elif not self.isConnected:
@@ -1053,7 +1055,7 @@ class Debugger:
 
 
 if __name__ == '__main__':
-    goodPorts = {}
+    # goodPorts = {}
     try:
         model = "Bittle"
         Debugger(model,language)

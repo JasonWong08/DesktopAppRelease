@@ -16,6 +16,8 @@ import logging
 import queue
 import time
 # import webbrowser
+import os
+os.environ["PETOI_SHOW_GUI"] = "1"
 from PetoiRobot import *
 
 regularW = 14
@@ -1064,9 +1066,9 @@ class Uploader:
 
         saveConfigToFile(self.configuration, filename)
 
-        # 更新配置文件
-        # 第9行：保存此次运行程序时的系统串口列表
-        # 第10行：保存此次运行程序得到的可以打开的串口列表
+        # Update config file
+        # Line 9: persist system serial port list for this run
+        # Line 10: persist successfully opened serial port list for this run
         allPortNames = portStrList
         newValidPorts = readValidPortsFromConfig()
         if self.validPort != "" and self.validPort not in newValidPorts:

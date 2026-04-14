@@ -1,5 +1,7 @@
 #!/opt/anaconda3/envs/petoi/bin/python3
 # -*- coding: utf-8 -*-
+import os
+os.environ["PETOI_SHOW_GUI"] = "1"
 from PetoiRobot import *
 
 language = languageList['English']
@@ -117,7 +119,7 @@ class Tuner:
             self.winTuner.destroy()
             
 if __name__ == '__main__':
-    goodPorts = {}
+    # goodPorts = {}
     try:
         Tuner(model,language)
         closeAllSerial(goodPorts)

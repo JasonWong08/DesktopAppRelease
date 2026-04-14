@@ -1,5 +1,7 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
+import os
+os.environ["PETOI_SHOW_GUI"] = "1"
 from PetoiRobot import *
 
 language = languageList['English']
@@ -268,11 +270,12 @@ class Calibrator:
                     ORI = VERTICAL
                     LEN = self.parameterSet['sliderLen']
                     # ALIGN = 'sw'
-            stt = NORMAL
             if i in NaJoints[self.model]:
                 clr = 'light yellow'
+                stt = DISABLED
             else:
                 clr = 'yellow'
+                stt = NORMAL
             
             # Set side labels
             if self.is6dof:
@@ -446,7 +449,7 @@ class Calibrator:
             os._exit(0)
             
 if __name__ == '__main__':
-    goodPorts = {}
+    # goodPorts = {}
     try:
         #        time.sleep(2)
         #        if len(goodPorts)>0:

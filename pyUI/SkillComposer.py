@@ -11,6 +11,8 @@ from tkinter.filedialog import asksaveasfile, askopenfilename
 from tkinter.colorchooser import askcolor
 import re
 from tkinter import ttk
+import os
+os.environ["PETOI_SHOW_GUI"] = "1"
 from PetoiRobot import *
 
 language = languageList['English']
@@ -1026,8 +1028,9 @@ class SkillComposer:
                 self.getWidget(r, cTrig).insert(0, txt(triggerAxis[inv_triggerAxis[vTrig]]))
 
     def showAbout(self):
-        messagebox.showinfo('Petoi Controller UI',
-                            u'Petoi Controller for OpenCat\nOpen Source on GitHub\nCopyright © Petoi LLC\nwww.petoi.com')
+        # messagebox.showinfo('Petoi Controller UI',
+        #                     u'Petoi Controller for OpenCat\nOpen Source on GitHub\nCopyright © Petoi LLC\nwww.petoi.com')
+        messagebox.showinfo(txt('titleVersion'), txt('msgVersion'))
         self.window.focus_force()
 
     def changeModel(self, model):
@@ -2613,7 +2616,7 @@ class SkillComposer:
             os._exit(0)
            
 if __name__ == '__main__':
-    goodPorts = {}
+    # goodPorts = {}
     try:
 #        connectPort(goodPorts)
 #        ports = goodPorts
