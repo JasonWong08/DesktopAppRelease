@@ -660,7 +660,7 @@ class SkillComposer:
 
     def deacGyrp(self):
         self.boardVer = config.version_
-        printH("boardVer:", self.boardVer)
+        # printH("boardVer:", self.boardVer)
         # Check if boardVer is empty or None to avoid IndexError
         if not self.boardVer or len(self.boardVer) == 0:
             logger.warning(f"boardVer is empty, skipping gyro deactivation. config.version_: '{config.version_}'")
