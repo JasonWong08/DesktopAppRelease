@@ -163,7 +163,7 @@ class Calibrator:
         # Use actual model name for images (Mini has its own copies)
         modelForImage = config.model_
 
-        if "B" in self.boardVersion:
+        if "B" in self.boardVersion and config.model_ != 'DoF16':
             self.imgWiring = createImage(self.frameCalibButtons,
                                          resourcePath + modelForImage + self.boardVersion[1] + '_Wire.jpeg',
                                          self.parameterSet['imageW'])
