@@ -658,7 +658,7 @@ class SkillComposer:
             self.dialValue[idx].set(False)
             self.frameDial.winfo_children()[idx+1].config(fg='red')
 
-    def deacGyrp(self):
+    def deacGyro(self):
         self.boardVer = config.version_
         # printH("boardVer:", self.boardVer)
         # Check if boardVer is empty or None to avoid IndexError
@@ -731,7 +731,7 @@ class SkillComposer:
             tip(button, txt(tipDial[i]))
         # for i in range(len(dialTable)):
         #     printH(list(dialTable)[i], self.dialValue[i].get())
-        self.deacGyrp()
+        self.deacGyro()
 
         self.createPortMenu()
         
@@ -778,7 +778,7 @@ class SkillComposer:
                 self.options.insert(0, txt('All'))
             if self.keepChecking:
                 self.frameDial.winfo_children()[1].config(text=txt('Connected'), fg='green')
-                self.deacGyrp()
+                self.deacGyro()
         for string in self.options:
             menu.add_command(label=string, command=lambda p=string: self.port.set(p))
         self.port.set(self.options[0])
@@ -2559,7 +2559,7 @@ class SkillComposer:
                     send(ports, ['b', [10, 90], 0])
                     if len(goodPorts) > 0:
                         self.frameDial.winfo_children()[1].config(text=txt('Connected'), fg='green')
-                        self.deacGyrp()
+                        self.deacGyro()
                         # for b in buttons:
                         #     b.config(state = NORMAL)
                     else:
