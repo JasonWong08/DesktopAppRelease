@@ -539,13 +539,15 @@ class SkillComposer:
                     from_val = -5
                     to_val = 125
                 elif i in [2, 3, 4, 5] and self.model == 'Mini':
-                    # Mini legs allow wider +/-200 range
-                    from_val = -200
-                    to_val = 200
-                elif i in [2, 3]:  # Shoulder joints
+                    mini_leg_ranges = {2: (-190, 110), 3: (-190, 110), 4: (-50, 250), 5: (-50, 250)}
+                    from_val, to_val = mini_leg_ranges[i]
+                elif i in [2, 3, 4, 5] and self.model == 'Chero':
+                    chero_leg_ranges = {2: (-85, 70), 3: (-85, 70), 4: (-80, 85), 5: (-80, 85)}
+                    from_val, to_val = chero_leg_ranges[i]
+                elif i in [2, 3]:  # Shoulder joints (fallback)
                     from_val = -85
                     to_val = 70
-                elif i in [4, 5]:  # Arm joints
+                elif i in [4, 5]:  # Arm joints (fallback)
                     from_val = -80
                     to_val = 85
                 else:
