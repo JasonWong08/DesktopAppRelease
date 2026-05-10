@@ -401,25 +401,45 @@ def splitTaskForLargeAngles(task):
         var = task[1]
         indexedList = list()
         if token == 'L':
-            # Determine grid size based on robot model
-            if hasattr(config, 'model_') and config.model_ and 'Chero' in config.model_ or 'Mini' in config.model_:
-                gridSize = 2  # 2x3 grid for Chero
-                maxJoints = 6
+            model_str = getattr(config, 'model_', None) or ''
+            is_chero_mini = bool(model_str) and (
+                'Chero' in model_str or 'Mini' in model_str
+            )
+            # Chero-like UI always sends exactly 6 angles; do not rely on config.model_
+            # (may be unset before connect), or we take the 16-joint branch and index past len-1.
+            is_six_joint_l = len(var) == 6
+            if is_chero_mini or is_six_joint_l:
+                # Six packed joint values; byte wire must stay in [-128, 127]. Mini legs can exceed 125.
+                for idx in range(min(6, len(var))):
+                    angle = var[idx]
+                    if angle < -125 or angle > 125:
+                        indexedList += [idx, angle]
+                        var[idx] = max(min(int(angle), 125), -125)
             else:
                 gridSize = 4  # 4x4 grid for other robots
-                maxJoints = 16
-                
-            for i in range(gridSize):
-                for j in range(gridSize):
-                    angle = var[gridSize * j + i]
-                    if angle < -125 or angle > 125:
-                        indexedList += [gridSize * j + i, angle]
-                        var[gridSize * j + i] = max(min(angle, 125), -125)
+                for i in range(gridSize):
+                    for j in range(gridSize):
+                        angle = var[gridSize * j + i]
+                        if angle < -125 or angle > 125:
+                            indexedList += [gridSize * j + i, angle]
+                            var[gridSize * j + i] = max(min(angle, 125), -125)
             if len(var):
                 queue.append(['L', var, task[-1]])
             if len(indexedList):
                 queue[0][-1] = 0.01
-                queue.append(['i', indexedList, task[-1]])
+                m_pairs = []
+                i_pairs = []
+                for k in range(0, len(indexedList), 2):
+                    ji = indexedList[k]
+                    aa = indexedList[k + 1]
+                    if (is_chero_mini or is_six_joint_l) and ji == 0:
+                        m_pairs.extend([ji, aa])
+                    else:
+                        i_pairs.extend([ji, aa])
+                if m_pairs:
+                    queue.append(['m', m_pairs, task[-1]])
+                if i_pairs:
+                    queue.append(['i', i_pairs, task[-1]])
         #                print(queue)
         elif token == 'I':
             if min(var) < -125 or max(var) > 125:

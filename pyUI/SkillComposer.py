@@ -50,6 +50,47 @@ def _wire_payload_to_ws_command(payload):
     return "b64:" + base64.b64encode(payload).decode("ascii")
 
 
+_WS_BANNER_KEYS = ("results", "result", "output", "stdout", "message", "logs", "lines", "text", "reply", "data")
+
+
+def _extract_ws_banner_text(payload):
+    """Collect board banner text from ESP WebSocket JSON (field names vary by firmware builds)."""
+    if not isinstance(payload, dict):
+        return ""
+    chunks = []
+    for key in _WS_BANNER_KEYS:
+        val = payload.get(key)
+        if val is None:
+            continue
+        if isinstance(val, list):
+            piece = "\n".join(str(x) for x in val).strip()
+            if piece:
+                chunks.append(piece)
+        elif isinstance(val, dict):
+            try:
+                piece = json.dumps(val, ensure_ascii=False).strip()
+            except Exception:
+                piece = str(val).strip()
+            if piece:
+                chunks.append(piece)
+        else:
+            piece = str(val).strip()
+            if piece:
+                chunks.append(piece)
+    if chunks:
+        return "\n".join(chunks).strip()
+    try:
+        return json.dumps(payload, ensure_ascii=False)
+    except Exception:
+        return ""
+
+def _looks_like_board_banner_fragment(text):
+    if not text or not isinstance(text, str):
+        return False
+    u = text.upper()
+    return any(k in u for k in ("NYBBLE", "BITTLE", "DOF16", "CHERO", "MINI", "PETOI", "OPENCAT"))
+
+
 class SkillComposerWSClient:
     """OpenCat ESP32 WebSocket client (same wire format as cpgTuner_simple.py, ws://host:81)."""
 
@@ -95,6 +136,10 @@ class SkillComposerWSClient:
             self.ws = None
 
     def _command_timeout(self, command):
+        if not isinstance(command, str):
+            return 5
+        if command.startswith("?"):
+            return 18
         if command.startswith("b64:Q") or (command.startswith("B ") and len(command.split(" ")) > 10):
             return 120
         if command.startswith("b64:") and len(command) > 100:
@@ -111,6 +156,7 @@ class SkillComposerWSClient:
             if not self.connect():
                 return False
         timeout_sec = self._command_timeout(command)
+        is_query_like = isinstance(command, str) and command.lstrip().startswith("?")
         try:
             task_id = str(int(time.time() * 1000))
             message = {
@@ -120,33 +166,71 @@ class SkillComposerWSClient:
                 "timestamp": int(time.time() * 1000),
             }
             self.ws.send(json.dumps(message))
-            self.ws.settimeout(min(3, timeout_sec))
-            for _ in range(8):
+            recv_timeout = min(max(3, timeout_sec), 20)
+            self.ws.settimeout(recv_timeout)
+            max_iters = 24 if is_query_like else 8
+            for _ in range(max_iters):
                 try:
                     raw = self.ws.recv()
                 except Exception:
                     return ""
+                blob_raw = raw if isinstance(raw, str) else raw.decode("utf-8", errors="replace")
                 try:
-                    data = json.loads(raw)
+                    data = json.loads(blob_raw)
                 except json.JSONDecodeError:
+                    if is_query_like and blob_raw.strip():
+                        bs = blob_raw.strip()
+                        if _looks_like_board_banner_fragment(bs) or (len(bs) > 40 and ("Board" in bs or ":" in bs)):
+                            logger.debug(f"WiFi '?': plain-text frame (<100 chars excerpt): {bs[:320]!r}")
+                            return bs
                     continue
                 rtype = data.get("type")
                 if rtype in ("connected", "heartbeat"):
                     continue
-                if rtype == "response":
-                    if data.get("taskId") != task_id:
+
+                # PetoiWebCoding js/petoi_async_client.js handleMessage: replies use taskId + status
+                # (running → progress, completed → message.results, error → fail) — not necessarily type:"response".
+                tid_in = data.get("taskId")
+                if tid_in is not None and str(tid_in) == str(task_id):
+                    st = (data.get("status") or "").lower()
+                    if st == "running":
                         continue
-                    if data.get("status") == "error":
+                    if st == "error":
                         return False
-                    results = data.get("results")
-                    if results and isinstance(results, list):
-                        return "\n".join(str(x) for x in results)
+                    if st == "completed":
+                        results = data.get("results")
+                        if isinstance(results, list) and len(results) > 0:
+                            out = "\n".join(str(x) for x in results)
+                            if is_query_like and len(out) < 400:
+                                logger.debug(f"WiFi '?' WS completed excerpt: {out[:320]!r}")
+                            return out
+                        if isinstance(results, str) and results.strip():
+                            return results.strip()
+                        text = _extract_ws_banner_text(data)
+                        if text.strip():
+                            return text
+                        return ""
+
+                # Alternate / older protocol: type == "response"
+                if rtype == "response":
+                    if tid_in is not None and str(tid_in) != str(task_id):
+                        continue
+                    st = (data.get("status") or "").lower()
+                    if st in ("error", "failed"):
+                        return False
+                    text = _extract_ws_banner_text(data)
+                    if text:
+                        if is_query_like and len(text) < 400:
+                            logger.debug(f"WiFi '?' WS response excerpt: {text[:320]!r}")
+                        return text
                     return ""
             return ""
         except Exception as e:
             logger.info(f"WebSocket send_command error: {e}")
             self.is_connected = False
             return False
+
+
 def txt(key):
     return language.get(key, textEN[key])
     
@@ -942,7 +1026,45 @@ class SkillComposer:
         self._prev_good_port_count = len(goodPorts)
         if len(goodPorts) > 0 and prev_n == 0:
             self.window.after(600, self._try_auto_wifi_from_serial_thread)
+            # probe with '?' finishes shortly after ports appear — align UI to board model
+            self.window.after(1500, self.sync_ui_from_hardware_model_after_connect)
         print('***@@@ update menu function ended')#debug
+
+    def sync_ui_from_hardware_model_after_connect(self):
+        """Rebuild controller when runtime config.model_ (serial/WiFi ?) differs from the Model menu (self.configName)."""
+        if not getattr(self, "ready", 0):
+            return
+        raw = getattr(config, "model_", "") or ""
+        desired = self._desired_menu_label_for_runtime_config(raw)
+        if not desired:
+            logger.debug(f"sync_ui: no menu mapping for config.model_={raw!r}")
+            return
+        cur = self.configName or ""
+        if desired.replace(" ", "") != cur.replace(" ", ""):
+            logger.info(f"SkillComposer sync model UI: {cur!r} -> {desired!r} (runtime config.model_={raw!r})")
+            try:
+                self.changeModel(desired)
+            except Exception as e:
+                logger.debug(f"sync_ui changeModel failed: {e}")
+        else:
+            config.model_ = self.configName.replace(" ", "")
+            try:
+                updatePostureTable()
+            except Exception:
+                pass
+
+    def _desired_menu_label_for_runtime_config(self, raw):
+        """Map config.model_(banner/shorthand) to a label in modelOptions."""
+        if not raw:
+            return None
+        m = self._menu_label_from_board_line_for_wifi(raw)
+        if m:
+            return m
+        c = raw.replace(" ", "").upper()
+        for opt in modelOptions:
+            if c == opt.replace(" ", "").upper():
+                return opt
+        return None
 
     def changePort(self, magicArg):
         global ports
@@ -1046,11 +1168,95 @@ class SkillComposer:
             if self.wifiConnectButton:
                 self.wifiConnectButton.config(text=txt("wifiWsConnected"))
             self.updatePortMenu()
+            self._wifi_schedule_model_query_after_connect()
+            # If '?' is slow or empty on first try, re-check config after board info may arrive
+            self.window.after(2800, self.sync_ui_from_hardware_model_after_connect)
             return True
         self.ws_client = None
         if show_err:
             messagebox.showerror("", txt("wifiWsFailed"), parent=self.window)
         return False
+
+    def _menu_label_from_board_line_for_wifi(self, board_line):
+        """Map firmware text line from '?' reply to Model menu entry (same options as Serial discovery)."""
+        if not board_line:
+            return None
+        line = board_line.strip()
+        if 'Nybble' in line:
+            if 'Q' in line.replace(' ', '').upper():
+                return 'Nybble Q'
+            return 'Nybble'
+        if 'DoF16' in line:
+            return 'DoF16'
+        if 'Chero' in line:
+            return 'Chero'
+        if 'Mini' in line:
+            return 'Mini'
+        if 'Bittle' in line:
+            compact = line.replace(' ', '')
+            if 'X+Arm' in compact or 'X+ARM' in compact.upper():
+                return 'Bittle X+Arm'
+            if 'X' in line:
+                return 'Bittle X'
+            return 'Bittle'
+        return None
+
+    def _apply_wifi_board_info_text(self, body):
+        """Parse WiFi '?' reply like serial; then sync Model menu / layout to config.model_."""
+        if body is False or body is None:
+            text = ""
+        else:
+            text = str(body).strip()
+        if text:
+            getModelAndVersion(['?', text])
+        self.sync_ui_from_hardware_model_after_connect()
+
+    def _wifi_fetch_banner_over_ws(self, client):
+        """Issue '?' like UART wire; try several command strings the bridge may expect."""
+        cmds = ["?\n", "?"]
+        try:
+            wire_cmd = _wire_payload_to_ws_command(build_task_wire_bytes(["?", 0]))
+            if isinstance(wire_cmd, str) and wire_cmd not in cmds:
+                cmds.append(wire_cmd)
+        except Exception:
+            pass
+        for c in cmds:
+            try:
+                body = client.send_command(c)
+            except Exception as e:
+                logger.debug(f"WiFi banner cmd {c!r}: {e}")
+                body = ""
+            if body is False:
+                continue
+            text = str(body).strip()
+            if text:
+                return text
+        return ""
+
+    def _wifi_schedule_model_query_after_connect(self):
+        """After WS connect, send '?' like serial testPort (ardSerial.getModelAndVersion)."""
+        client = self.ws_client
+        if not client or not client.is_connected:
+            return
+
+        def work():
+            try:
+                body = self._wifi_fetch_banner_over_ws(client)
+            except Exception as e:
+                logger.debug(f"WiFi banner query failed: {e}")
+                body = ""
+
+            def apply():
+                if self.ws_client is not client:
+                    return
+                self._apply_wifi_board_info_text(body)
+
+            try:
+                self.window.after(0, apply)
+            except Exception:
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
 
     def onWifiConnectClick(self):
         if self._ws_ready():
@@ -1418,6 +1624,12 @@ class SkillComposer:
             self.createPosture()
             self.placeProductImage(model)
             self.restartSkillEditor()
+            # Keep ardSerial / global logic (e.g. splitTaskForLargeAngles) aligned with the Model menu.
+            config.model_ = self.configName.replace(' ', '')
+            try:
+                updatePostureTable()
+            except Exception:
+                pass
 
     def addFrame(self, currentRow):
         singleFrame = Frame(self.scrollable_frame, borderwidth=1, relief=RAISED)
@@ -2084,15 +2296,13 @@ class SkillComposer:
 
     def mirrorAngles(self, singleFrame):
         if self.is6dof:
-            # For Chero-like (6 joints): specific mirror logic
-            if len(singleFrame) > 4 + 5:  # Ensure we have enough elements
-                # Mirror head pan (joint 0)
-                singleFrame[4 + 0] = -singleFrame[4 + 0]
-                # Head tilt (joint 1) stays the same
-                # Swap left/right shoulder joints (2,3)
-                singleFrame[4 + 2], singleFrame[4 + 3] = singleFrame[4 + 3], singleFrame[4 + 2]
-                # Swap left/right arm joints (4,5)  
-                singleFrame[4 + 4], singleFrame[4 + 5] = singleFrame[4 + 5], singleFrame[4 + 4]
+            # Chero/Mini stores 6 joints at frame indices 4,5 and 12..15 (not 4..9).
+            if len(singleFrame) > 15:
+                # Mirror head pan (joint 0) at frame[4]; head tilt at frame[5] unchanged.
+                singleFrame[4] = -singleFrame[4]
+                # Swap left/right pairs for limb joints at frame[12:16].
+                singleFrame[12], singleFrame[13] = singleFrame[13], singleFrame[12]
+                singleFrame[14], singleFrame[15] = singleFrame[15], singleFrame[14]
         else:
             # Original logic for 16-joint models
             singleFrame[1] = -singleFrame[1]
@@ -2900,6 +3110,7 @@ class SkillComposer:
                     if len(goodPorts) > 0:
                         self.frameDial.winfo_children()[1].config(text=txt('Connected'), fg='green')
                         self.deacGyro()
+                        self.window.after(800, self.sync_ui_from_hardware_model_after_connect)
                         # for b in buttons:
                         #     b.config(state = NORMAL)
                     else:
