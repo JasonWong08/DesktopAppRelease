@@ -1,5 +1,5 @@
-versionNum = '1.2.8'
-dateStr = '2026-05-12'
+versionNum = '1.2.9'
+dateStr = '2026-05-28'
 
 textEN = {
     'lan':'English',
