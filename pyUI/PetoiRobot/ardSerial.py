@@ -201,6 +201,99 @@ def serialWriteByte(port, var=None):
     time.sleep(0.01)
 
 
+def _build_serialWriteNumToByte_payload(token, var=None):
+    """Build serial payload bytes for numeric token tasks (same packing as serialWriteNumToByte, no I/O)."""
+    logger.debug(f'_build_serialWriteNumToByte_payload, token={token}, var={var}')
+    if var is None:
+        var = []
+    if token == 'K':
+        var = list(var)
+        period = var[0]
+        if period > 0:
+            skillHeader = 4
+        else:
+            skillHeader = 7
+        if hasattr(config, 'model_') and config.model_ and 'Chero' in config.model_ or 'Mini' in config.model_:
+            maxJoints = 6
+        else:
+            maxJoints = 16
+        if period > 1:
+            frameSize = 8
+        elif period == 1:
+            frameSize = maxJoints
+        else:
+            frameSize = 20
+        angleRatio = 1
+        for row in range(abs(period)):
+            for angle in var[skillHeader + row * frameSize:skillHeader + row * frameSize + min(maxJoints, frameSize)]:
+                if angle > 125 or angle < -125:
+                    angleRatio = 2
+                    break
+            if angleRatio == 2:
+                break
+        if angleRatio == 2:
+            var[3] = 2
+            for row in range(abs(period)):
+                for i in range(skillHeader + row * frameSize, skillHeader + row * frameSize + min(maxJoints, frameSize)):
+                    var[i] //= 2
+            printH('rescaled:\n', var)
+        var = list(map(int, var))
+        return token.encode() + struct.pack('b' * len(var), *var) + b'~'
+    if token.isupper():
+        if len(var) > 0:
+            message = list(map(int, var))
+            if token == 'B':
+                for l in range(len(message) // 2):
+                    message[l * 2 + 1] *= 8
+                    logger.debug(f"{message[l*2]},{message[l*2+1]}")
+        else:
+            message = []
+        if token == 'W' or token == 'C':
+            packed = struct.pack('B' * len(message), *message)
+        else:
+            packed = struct.pack('b' * len(message), *message)
+        return token.encode() + packed + b'~'
+    message = ""
+    for element in var:
+        message += (str(round(element)) + " ")
+    return token.encode() + encode(message) + b'\n'
+
+
+def _build_serialWriteByte_payload(var=None):
+    """Build serial payload bytes for serialWriteByte-style tasks (no I/O)."""
+    if var is None:
+        var = []
+    token = var[0][0]
+    if (token == 'c' or token == 'm' or token == 'i' or token == 'b' or token == 'u' or token == 't') and len(var) >= 2:
+        in_str = ""
+        for element in var:
+            in_str = in_str + element + " "
+        in_str += '\n'
+        return encode(in_str)
+    if token == 'L' or token == 'I':
+        var = list(var)
+        if len(var[0]) > 1:
+            var.insert(1, var[0][1:])
+        var[1:] = list(map(int, var[1:]))
+        return token.encode() + struct.pack('b' * (len(var) - 1), *var[1:]) + b'~'
+    if token == 'w' or token == 'k' or token == 'X' or token == 'g':
+        return encode(var[0] + '\n')
+    return encode(token + '\n')
+
+
+def build_task_wire_bytes(task):
+    """Exact wire payload for one task (matches sendTask encoding, no I/O)."""
+    if not task:
+        return None
+    if len(task) == 2:
+        return _build_serialWriteByte_payload([task[0]])
+    if len(task) < 3:
+        return None
+    if isinstance(task[1], list) and len(task[1]) > 0 and isinstance(task[1][0], int):
+        return _build_serialWriteNumToByte_payload(task[0], task[1])
+    return _build_serialWriteByte_payload(task[1])
+
+
 def printSerialMessage(port, token, timeout=0):
     if 'X' in token:
         token = 'X'
@@ -308,25 +401,45 @@ def splitTaskForLargeAngles(task):
         var = task[1]
         indexedList = list()
         if token == 'L':
-            # Determine grid size based on robot model
-            if hasattr(config, 'model_') and config.model_ and 'Chero' in config.model_ or 'Mini' in config.model_:
-                gridSize = 2  # 2x3 grid for Chero
-                maxJoints = 6
+            model_str = getattr(config, 'model_', None) or ''
+            is_chero_mini = bool(model_str) and (
+                'Chero' in model_str or 'Mini' in model_str
+            )
+            # Chero-like UI always sends exactly 6 angles; do not rely on config.model_
+            # (may be unset before connect), or we take the 16-joint branch and index past len-1.
+            is_six_joint_l = len(var) == 6
+            if is_chero_mini or is_six_joint_l:
+                # Six packed joint values; byte wire must stay in [-128, 127]. Mini legs can exceed 125.
+                for idx in range(min(6, len(var))):
+                    angle = var[idx]
+                    if angle < -125 or angle > 125:
+                        indexedList += [idx, angle]
+                        var[idx] = max(min(int(angle), 125), -125)
             else:
                 gridSize = 4  # 4x4 grid for other robots
-                maxJoints = 16
-                
-            for i in range(gridSize):
-                for j in range(gridSize):
-                    angle = var[gridSize * j + i]
-                    if angle < -125 or angle > 125:
-                        indexedList += [gridSize * j + i, angle]
-                        var[gridSize * j + i] = max(min(angle, 125), -125)
+                for i in range(gridSize):
+                    for j in range(gridSize):
+                        angle = var[gridSize * j + i]
+                        if angle < -125 or angle > 125:
+                            indexedList += [gridSize * j + i, angle]
+                            var[gridSize * j + i] = max(min(angle, 125), -125)
             if len(var):
                 queue.append(['L', var, task[-1]])
             if len(indexedList):
                 queue[0][-1] = 0.01
-                queue.append(['i', indexedList, task[-1]])
+                m_pairs = []
+                i_pairs = []
+                for k in range(0, len(indexedList), 2):
+                    ji = indexedList[k]
+                    aa = indexedList[k + 1]
+                    if (is_chero_mini or is_six_joint_l) and ji == 0:
+                        m_pairs.extend([ji, aa])
+                    else:
+                        i_pairs.extend([ji, aa])
+                if m_pairs:
+                    queue.append(['m', m_pairs, task[-1]])
+                if i_pairs:
+                    queue.append(['i', i_pairs, task[-1]])
         #                print(queue)
         elif token == 'I':
             if min(var) < -125 or max(var) > 125:
@@ -769,15 +882,21 @@ def checkPortList(PortList, allPorts, needTesting=True):
                 t.join(timeout=8)
 
 
-def keepCheckingPort(portList, cond1=None, check=True, updateFunc = lambda:None):
+def keepCheckingPort(portList, cond1=None, check=True, updateFunc = lambda:None, probe_new_ports=True):
     # portList is a dictionary, the structure is {SerialPort Object(<class 'SerialCommunication.Communication'>): portName(string), ...}
     # allPorts is a string list which delete the duplicated port(Reserve the name of the serial port that contains the usbmodem)
     # portStrList is the serial port string list
+    # probe_new_ports: if False (or callable returning False), skip auto-opening newly plugged USB ports.
     global portStrList
     allPorts = Communication.Print_Used_Com()
     logger.debug(f"allPorts is {allPorts}")
     if cond1 is None:
         cond1 = lambda: len(portList) > 0
+
+    def _allow_probe_new():
+        if callable(probe_new_ports):
+            return probe_new_ports()
+        return bool(probe_new_ports)
 
     while cond1():
         time.sleep(0.5)
@@ -789,7 +908,7 @@ def keepCheckingPort(portList, cond1=None, check=True, updateFunc = lambda:None)
             currentPorts = Communication.Print_Used_Com()
             newPort = deleteDuplicatedUsbSerial(list(set(currentPorts) - set(allPorts)))
             # newPort = list(set(currentPorts) - set(allPorts))
-            if check:
+            if check and _allow_probe_new():
                 time.sleep(0.5)
                 checkPortList(portList, newPort)
             else:

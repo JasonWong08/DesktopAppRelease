@@ -10,12 +10,227 @@ import copy
 from tkinter.filedialog import asksaveasfile, askopenfilename
 from tkinter.colorchooser import askcolor
 import re
+import json
+import base64
+import time
+import threading
 from tkinter import ttk
 import os
 os.environ["PETOI_SHOW_GUI"] = "1"
 from PetoiRobot import *
 
+try:
+    import websocket
+except ImportError:
+    websocket = None
+
 language = languageList['English']
+
+_RE_IPV4_WIFI = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+
+def _sanitize_ipv4_address(text):
+    if not text:
+        return ""
+    m = _RE_IPV4_WIFI.search(str(text).strip())
+    return m.group(0) if m else ""
+
+
+def _wire_payload_to_ws_command(payload):
+    if not payload:
+        return None
+    if b"~" in payload or payload.startswith(b"K"):
+        return "b64:" + base64.b64encode(payload).decode("ascii")
+    try:
+        s = payload.decode("utf-8").rstrip("\n").rstrip("\r")
+        if s and all(ord(c) < 128 for c in s):
+            return s
+    except Exception:
+        pass
+    return "b64:" + base64.b64encode(payload).decode("ascii")
+
+
+_WS_BANNER_KEYS = ("results", "result", "output", "stdout", "message", "logs", "lines", "text", "reply", "data")
+
+
+def _extract_ws_banner_text(payload):
+    """Collect board banner text from ESP WebSocket JSON (field names vary by firmware builds)."""
+    if not isinstance(payload, dict):
+        return ""
+    chunks = []
+    for key in _WS_BANNER_KEYS:
+        val = payload.get(key)
+        if val is None:
+            continue
+        if isinstance(val, list):
+            piece = "\n".join(str(x) for x in val).strip()
+            if piece:
+                chunks.append(piece)
+        elif isinstance(val, dict):
+            try:
+                piece = json.dumps(val, ensure_ascii=False).strip()
+            except Exception:
+                piece = str(val).strip()
+            if piece:
+                chunks.append(piece)
+        else:
+            piece = str(val).strip()
+            if piece:
+                chunks.append(piece)
+    if chunks:
+        return "\n".join(chunks).strip()
+    try:
+        return json.dumps(payload, ensure_ascii=False)
+    except Exception:
+        return ""
+
+def _looks_like_board_banner_fragment(text):
+    if not text or not isinstance(text, str):
+        return False
+    u = text.upper()
+    return any(k in u for k in ("NYBBLE", "BITTLE", "DOF16", "CHERO", "MINI", "PETOI", "OPENCAT"))
+
+
+class SkillComposerWSClient:
+    """OpenCat ESP32 WebSocket client (same wire format as cpgTuner_simple.py, ws://host:81)."""
+
+    def __init__(self, ip_address, port=81):
+        self.ip_address = ip_address
+        self.port = port
+        self.ws = None
+        self.is_connected = False
+        self.url = f"ws://{ip_address}:{port}"
+        self.connection_timeout = 3
+
+    def connect(self):
+        if websocket is None:
+            return False
+        try:
+            if self.ws:
+                try:
+                    self.ws.close()
+                except Exception:
+                    pass
+                self.ws = None
+            self.ws = websocket.create_connection(
+                self.url,
+                timeout=self.connection_timeout,
+                header={"User-Agent": "SkillComposer/1.0"},
+            )
+            self.is_connected = True
+            logger.info(f"WebSocket connected: {self.url}")
+            return True
+        except Exception as e:
+            logger.info(f"WebSocket connect failed: {e}")
+            self.is_connected = False
+            self.ws = None
+            return False
+
+    def disconnect(self):
+        self.is_connected = False
+        if self.ws:
+            try:
+                self.ws.close()
+            except Exception:
+                pass
+            self.ws = None
+
+    def _command_timeout(self, command):
+        if not isinstance(command, str):
+            return 5
+        if command.startswith("?"):
+            return 18
+        if command.startswith("b64:Q") or (command.startswith("B ") and len(command.split(" ")) > 10):
+            return 120
+        if command.startswith("b64:") and len(command) > 100:
+            return 30
+        if command.startswith("b64:"):
+            return 15
+        return 5
+
+    def send_command(self, command):
+        """Send one OpenCat command over WebSocket. Returns result text, '' if OK with no body, False on failure."""
+        if websocket is None:
+            return False
+        if not self.is_connected or not self.ws:
+            if not self.connect():
+                return False
+        timeout_sec = self._command_timeout(command)
+        is_query_like = isinstance(command, str) and command.lstrip().startswith("?")
+        try:
+            task_id = str(int(time.time() * 1000))
+            message = {
+                "type": "command",
+                "taskId": task_id,
+                "commands": [command],
+                "timestamp": int(time.time() * 1000),
+            }
+            self.ws.send(json.dumps(message))
+            recv_timeout = min(max(3, timeout_sec), 20)
+            self.ws.settimeout(recv_timeout)
+            max_iters = 24 if is_query_like else 8
+            for _ in range(max_iters):
+                try:
+                    raw = self.ws.recv()
+                except Exception:
+                    return ""
+                blob_raw = raw if isinstance(raw, str) else raw.decode("utf-8", errors="replace")
+                try:
+                    data = json.loads(blob_raw)
+                except json.JSONDecodeError:
+                    if is_query_like and blob_raw.strip():
+                        bs = blob_raw.strip()
+                        if _looks_like_board_banner_fragment(bs) or (len(bs) > 40 and ("Board" in bs or ":" in bs)):
+                            logger.debug(f"WiFi '?': plain-text frame (<100 chars excerpt): {bs[:320]!r}")
+                            return bs
+                    continue
+                rtype = data.get("type")
+                if rtype in ("connected", "heartbeat"):
+                    continue
+
+                # PetoiWebCoding js/petoi_async_client.js handleMessage: replies use taskId + status
+                # (running → progress, completed → message.results, error → fail) — not necessarily type:"response".
+                tid_in = data.get("taskId")
+                if tid_in is not None and str(tid_in) == str(task_id):
+                    st = (data.get("status") or "").lower()
+                    if st == "running":
+                        continue
+                    if st == "error":
+                        return False
+                    if st == "completed":
+                        results = data.get("results")
+                        if isinstance(results, list) and len(results) > 0:
+                            out = "\n".join(str(x) for x in results)
+                            if is_query_like and len(out) < 400:
+                                logger.debug(f"WiFi '?' WS completed excerpt: {out[:320]!r}")
+                            return out
+                        if isinstance(results, str) and results.strip():
+                            return results.strip()
+                        text = _extract_ws_banner_text(data)
+                        if text.strip():
+                            return text
+                        return ""
+
+                # Alternate / older protocol: type == "response"
+                if rtype == "response":
+                    if tid_in is not None and str(tid_in) != str(task_id):
+                        continue
+                    st = (data.get("status") or "").lower()
+                    if st in ("error", "failed"):
+                        return False
+                    text = _extract_ws_banner_text(data)
+                    if text:
+                        if is_query_like and len(text) < 400:
+                            logger.debug(f"WiFi '?' WS response excerpt: {text[:320]!r}")
+                        return text
+                    return ""
+            return ""
+        except Exception as e:
+            logger.info(f"WebSocket send_command error: {e}")
+            self.is_connected = False
+            return False
+
+
 def txt(key):
     return language.get(key, textEN[key])
     
@@ -215,7 +430,6 @@ class SkillComposer:
     def __init__(self,model, lan):
         global language
         language = lan
-        smartConnectPorts()
         start = time.time()
         while config.model_ == '':
             if time.time()-start > 5:
@@ -277,7 +491,11 @@ class SkillComposer:
         self.binderValue = list()
         self.binderButton = list()
         self.previousBinderValue = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-        self.keepChecking = True
+        self.keepChecking = False
+        self.ws_client = None
+        self.wifiIpVar = StringVar(value="192.168.")
+        self.wifiConnectButton = None
+        self._prev_good_port_count = 0
         self.ready = 0
         self.creatorInfoAcquired = False
         self.creator = StringVar()
@@ -366,10 +584,6 @@ class SkillComposer:
 
         self.window.protocol('WM_DELETE_WINDOW', self.on_closing)
         self.window.update()
-        t = threading.Thread(target=keepCheckingPort, args=(goodPorts,lambda:self.keepChecking,lambda:True,self.updatePortMenu,))
-        t.daemon = True
-        t.start()
-        time.sleep(2)
 
         self.window.focus_force()    # force the main interface to get focus
         self.ready = 1
@@ -539,7 +753,7 @@ class SkillComposer:
                     from_val = -5
                     to_val = 125
                 elif i in [2, 3, 4, 5] and self.model == 'Mini':
-                    mini_leg_ranges = {2: (-190, 110), 3: (-190, 110), 4: (-50, 250), 5: (-50, 250)}
+                    mini_leg_ranges = {2: (-230, 70), 3: (-230, 70), 4: (-50, 250), 5: (-50, 250)}
                     from_val, to_val = mini_leg_ranges[i]
                 elif i in [2, 3, 4, 5] and self.model == 'Chero':
                     chero_leg_ranges = {2: (-85, 70), 3: (-85, 70), 4: (-80, 85), 5: (-80, 85)}
@@ -671,10 +885,10 @@ class SkillComposer:
             logger.warning(f"boardVer is empty, skipping gyro deactivation. config.version_: '{config.version_}'")
             return
         if self.boardVer[0] == 'N':
-            res = send(goodPorts, ['G', 0])
+            res = self.composeSend(goodPorts, ['G', 0])
             if res != -1:
                 if res[0][0] == 'G':
-                    res = send(goodPorts, ['G', 0])
+                    res = self.composeSend(goodPorts, ['G', 0])
                     if res != -1 and res[0][0] == 'g':
                         self.buttDialAct(2, False)
                         # printH("gyro status:", res)
@@ -690,7 +904,7 @@ class SkillComposer:
             else:
                 self.buttDialAct(2, True)
         else:
-            res = send(goodPorts, ['gb', 0])
+            res = self.composeSend(goodPorts, ['gb', 0])
             # printH("res:", res)
             if res != -1 and res[0][0] == 'g':
                 self.buttDialAct(2, False)
@@ -719,7 +933,7 @@ class SkillComposer:
             #    dialState = DISABLED
             if i == 0:
                 wth = self.connectW
-                if len(goodPorts) > 0:
+                if len(goodPorts) > 0 and self.keepChecking:
                     defaultValue[0] = True
                     key = 'Connected'
                 else:
@@ -740,11 +954,23 @@ class SkillComposer:
 
         self.createPortMenu()
         
+        wifiEntry = Entry(self.frameDial, textvariable=self.wifiIpVar, width=18)
+        wifiEntry.grid(row=2, column=0, columnspan=4, padx=3, sticky=E + W)
+        self.wifiConnectButton = Button(
+            self.frameDial,
+            text=txt("wifiWsConnect"),
+            fg="blue",
+            width=self.dialW - 2,
+            command=self.onWifiConnectClick,
+        )
+        self.wifiConnectButton.grid(row=2, column=4, padx=3)
+        tip(wifiEntry, "ws://IP:81 OpenCat ESP32")
+
         self.newCmd = StringVar()
         entryCmd = Entry(self.frameDial, textvariable=self.newCmd)
-        entryCmd.grid(row=2, column=0, columnspan=4, padx=3, sticky=E + W)
+        entryCmd.grid(row=3, column=0, columnspan=4, padx=3, sticky=E + W)
         button = Button(self.frameDial,text=txt('Send'),fg='blue',width=self.dialW-2,command=self.sendCmd)
-        button.grid(row=2, column=4, padx=3)
+        button.grid(row=3, column=4, padx=3)
         entryCmd.bind('<Return>',self.sendCmd)
 
 
@@ -765,11 +991,15 @@ class SkillComposer:
         self.options = list(goodPorts.values())
         menu = self.portMenu['menu']
         menu.delete(0, 'end')
-        stt = NORMAL
+        dialBtnStt = NORMAL
+        portMenuStt = NORMAL
         #        self.dialValue[0].set(self.keepChecking)
         if len(self.options) == 0:
             self.options.insert(0, txt('None'))
-            stt = DISABLED
+            dialBtnStt = DISABLED
+            if self._ws_ready():
+                dialBtnStt = NORMAL
+            portMenuStt = DISABLED
             if self.keepChecking:
                 self.dialValue[0].set(True)
                 self.frameDial.winfo_children()[1].config(text=txt('Listening'), fg='orange')
@@ -790,15 +1020,57 @@ class SkillComposer:
 
         buttons = [self.frameDial.winfo_children()[i] for i in [2,3,4]]# [2,4] by skipping 3 was used to disable the gyro
         for b in buttons:
-            b.config(state=stt)
-        self.portMenu.config(state=stt)
+            b.config(state=dialBtnStt)
+        self.portMenu.config(state=portMenuStt)
+        prev_n = self._prev_good_port_count
+        self._prev_good_port_count = len(goodPorts)
+        if len(goodPorts) > 0 and prev_n == 0:
+            self.window.after(600, self._try_auto_wifi_from_serial_thread)
+            # probe with '?' finishes shortly after ports appear — align UI to board model
+            self.window.after(1500, self.sync_ui_from_hardware_model_after_connect)
         print('***@@@ update menu function ended')#debug
+
+    def sync_ui_from_hardware_model_after_connect(self):
+        """Rebuild controller when runtime config.model_ (serial/WiFi ?) differs from the Model menu (self.configName)."""
+        if not getattr(self, "ready", 0):
+            return
+        raw = getattr(config, "model_", "") or ""
+        desired = self._desired_menu_label_for_runtime_config(raw)
+        if not desired:
+            logger.debug(f"sync_ui: no menu mapping for config.model_={raw!r}")
+            return
+        cur = self.configName or ""
+        if desired.replace(" ", "") != cur.replace(" ", ""):
+            logger.info(f"SkillComposer sync model UI: {cur!r} -> {desired!r} (runtime config.model_={raw!r})")
+            try:
+                self.changeModel(desired)
+            except Exception as e:
+                logger.debug(f"sync_ui changeModel failed: {e}")
+        else:
+            config.model_ = self.configName.replace(" ", "")
+            try:
+                updatePostureTable()
+            except Exception:
+                pass
+
+    def _desired_menu_label_for_runtime_config(self, raw):
+        """Map config.model_(banner/shorthand) to a label in modelOptions."""
+        if not raw:
+            return None
+        m = self._menu_label_from_board_line_for_wifi(raw)
+        if m:
+            return m
+        c = raw.replace(" ", "").upper()
+        for opt in modelOptions:
+            if c == opt.replace(" ", "").upper():
+                return opt
+        return None
 
     def changePort(self, magicArg):
         global ports
         buttons = [self.frameDial.winfo_children()[i] for i in [2,3,4]]# [2,4] by skipping 3 was used to disable the gyro
         for b in buttons:
-            if len(goodPorts) == 0:
+            if len(goodPorts) == 0 and not self._ws_ready():
                 b.config(state=DISABLED)
             else:
                 b.config(state=NORMAL)
@@ -811,6 +1083,272 @@ class SkillComposer:
         else:
             singlePort = inv_dict[self.port.get()]
             ports = [singlePort]
+
+    def _valid_ipv4(self, s):
+        s = (s or "").strip()
+        parts = s.split(".")
+        if len(parts) != 4:
+            return False
+        try:
+            for p in parts:
+                n = int(p)
+                if n < 0 or n > 255:
+                    return False
+            return True
+        except ValueError:
+            return False
+
+    def _ws_ready(self):
+        return self.ws_client is not None and self.ws_client.is_connected
+
+    def composeSend(self, port, task, timeout=0):
+        queue = splitTaskForLargeAngles(task)
+        last = -1
+        for sub in queue:
+            if port and len(port) > 0:
+                last = send(port, sub, timeout)
+            elif self._ws_ready():
+                last = self._send_task_ws(sub, timeout)
+            else:
+                last = -1
+        return last
+
+    def _send_task_ws(self, task, timeout=0):
+        payload = build_task_wire_bytes(task)
+        if not payload:
+            return -1
+        cmd = _wire_payload_to_ws_command(payload)
+        if not cmd:
+            return -1
+        body = self.ws_client.send_command(cmd)
+        delay = 0
+        if len(task) >= 2:
+            try:
+                delay = float(task[-1])
+            except (TypeError, ValueError):
+                delay = 0
+        if delay > 0:
+            time.sleep(delay)
+        if body is False:
+            return -1
+        line = "k"
+        if body:
+            parts = body.replace("\r", "\n").split("\n")
+            for ln in reversed(parts):
+                lt = ln.strip()
+                if lt:
+                    line = lt.split()[0] if lt.split() else lt
+                    break
+        return [[line + "\n"], ""]
+
+    def _disconnect_websocket(self):
+        if self.ws_client:
+            self.ws_client.disconnect()
+            self.ws_client = None
+        if self.wifiConnectButton:
+            self.wifiConnectButton.config(text=txt("wifiWsConnect"))
+        try:
+            self.updatePortMenu()
+        except Exception:
+            pass
+
+    def _connect_websocket(self, ip, show_err=True):
+        if websocket is None:
+            if show_err:
+                messagebox.showerror("", txt("wifiWsNeedModule"), parent=self.window)
+            return False
+        ip = (ip or "").strip()
+        if not self._valid_ipv4(ip):
+            if show_err:
+                messagebox.showwarning("", txt("wifiIpInvalid"), parent=self.window)
+            return False
+        self._disconnect_websocket()
+        self.ws_client = SkillComposerWSClient(ip, 81)
+        if self.ws_client.connect():
+            if self.wifiConnectButton:
+                self.wifiConnectButton.config(text=txt("wifiWsConnected"))
+            self.updatePortMenu()
+            self._wifi_schedule_model_query_after_connect()
+            # If '?' is slow or empty on first try, re-check config after board info may arrive
+            self.window.after(2800, self.sync_ui_from_hardware_model_after_connect)
+            return True
+        self.ws_client = None
+        if show_err:
+            messagebox.showerror("", txt("wifiWsFailed"), parent=self.window)
+        return False
+
+    def _menu_label_from_board_line_for_wifi(self, board_line):
+        """Map firmware text line from '?' reply to Model menu entry (same options as Serial discovery)."""
+        if not board_line:
+            return None
+        line = board_line.strip()
+        if 'Nybble' in line:
+            if 'Q' in line.replace(' ', '').upper():
+                return 'Nybble Q'
+            return 'Nybble'
+        if 'DoF16' in line:
+            return 'DoF16'
+        if 'Chero' in line:
+            return 'Chero'
+        if 'Mini' in line:
+            return 'Mini'
+        if 'Bittle' in line:
+            compact = line.replace(' ', '')
+            if 'X+Arm' in compact or 'X+ARM' in compact.upper():
+                return 'Bittle X+Arm'
+            if 'X' in line:
+                return 'Bittle X'
+            return 'Bittle'
+        return None
+
+    def _apply_wifi_board_info_text(self, body):
+        """Parse WiFi '?' reply like serial; then sync Model menu / layout to config.model_."""
+        if body is False or body is None:
+            text = ""
+        else:
+            text = str(body).strip()
+        if text:
+            getModelAndVersion(['?', text])
+        self.sync_ui_from_hardware_model_after_connect()
+
+    def _wifi_fetch_banner_over_ws(self, client):
+        """Issue '?' like UART wire; try several command strings the bridge may expect."""
+        cmds = ["?\n", "?"]
+        try:
+            wire_cmd = _wire_payload_to_ws_command(build_task_wire_bytes(["?", 0]))
+            if isinstance(wire_cmd, str) and wire_cmd not in cmds:
+                cmds.append(wire_cmd)
+        except Exception:
+            pass
+        for c in cmds:
+            try:
+                body = client.send_command(c)
+            except Exception as e:
+                logger.debug(f"WiFi banner cmd {c!r}: {e}")
+                body = ""
+            if body is False:
+                continue
+            text = str(body).strip()
+            if text:
+                return text
+        return ""
+
+    def _wifi_schedule_model_query_after_connect(self):
+        """After WS connect, send '?' like serial testPort (ardSerial.getModelAndVersion)."""
+        client = self.ws_client
+        if not client or not client.is_connected:
+            return
+
+        def work():
+            try:
+                body = self._wifi_fetch_banner_over_ws(client)
+            except Exception as e:
+                logger.debug(f"WiFi banner query failed: {e}")
+                body = ""
+
+            def apply():
+                if self.ws_client is not client:
+                    return
+                self._apply_wifi_board_info_text(body)
+
+            try:
+                self.window.after(0, apply)
+            except Exception:
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def onWifiConnectClick(self):
+        if self._ws_ready():
+            self._disconnect_websocket()
+            return
+        ip = self.wifiIpVar.get().strip()
+        if self._valid_ipv4(ip):
+            self._connect_websocket(ip, show_err=True)
+            return
+        # Prefer global `ports` (same as composeSend); fallback to goodPorts e.g. port menu "None".
+        if self._serial_main_engines():
+
+            def work():
+                ip2 = self._query_ip_on_serial(probe=b"w?\n")
+                if not ip2:
+                    ip2 = self._query_ip_on_serial(probe=b"w\n")
+
+                def apply():
+                    if ip2:
+                        self.wifiIpVar.set(ip2)
+                        self._connect_websocket(ip2, show_err=True)
+                    else:
+                        messagebox.showwarning("", txt("wifiIpInvalid"), parent=self.window)
+
+                self.window.after(0, apply)
+
+            threading.Thread(target=work, daemon=True).start()
+            return
+        messagebox.showwarning("", txt("wifiIpInvalid"), parent=self.window)
+
+    def _serial_main_engines(self):
+        """SerialEngine list: same objects used for Send (global ports), then goodPorts if needed."""
+        global ports
+        engines = []
+        if isinstance(ports, list) and len(ports) > 0:
+            for o in ports:
+                e = getattr(o, "main_engine", None)
+                if e and getattr(e, "is_open", False):
+                    engines.append(e)
+        elif isinstance(ports, dict) and len(ports) > 0:
+            for o in ports.keys():
+                e = getattr(o, "main_engine", None)
+                if e and getattr(e, "is_open", False):
+                    engines.append(e)
+        if not engines:
+            for o in goodPorts.keys():
+                e = getattr(o, "main_engine", None)
+                if e and getattr(e, "is_open", False):
+                    engines.append(e)
+        return engines
+
+    def _query_ip_on_serial(self, probe=b"w\n"):
+        if isinstance(probe, str):
+            probe = probe.encode("utf-8")
+        if not probe.endswith(b"\n"):
+            probe = probe + b"\n"
+        for eng in self._serial_main_engines():
+            try:
+                eng.reset_input_buffer()
+                eng.write(probe)
+                time.sleep(0.5)
+                data = eng.read_all().decode("utf-8", errors="replace")
+                for line in data.splitlines():
+                    if "IP Address:" in line:
+                        tail = line.split("IP Address:", 1)[1].strip()
+                        if "WiFi" in tail and "\u672a" in tail:
+                            continue
+                        ip = _sanitize_ipv4_address(tail)
+                        if ip:
+                            return ip
+                any_ip = _sanitize_ipv4_address(data)
+                if any_ip:
+                    return any_ip
+            except Exception as e:
+                logger.debug(f"WiFi IP query: {e}")
+        return ""
+
+    def _try_auto_wifi_from_serial_thread(self):
+        if not self._serial_main_engines():
+            return
+        if self._ws_ready():
+            return
+
+        def work():
+            ip = self._query_ip_on_serial()
+            if ip:
+                def apply():
+                    self.wifiIpVar.set(ip)
+                    self._connect_websocket(ip, show_err=False)
+                self.window.after(0, apply)
+
+        threading.Thread(target=work, daemon=True).start()
 
     def createPosture(self):
         self.framePosture = Frame(self.window)
@@ -1086,6 +1624,12 @@ class SkillComposer:
             self.createPosture()
             self.placeProductImage(model)
             self.restartSkillEditor()
+            # Keep ardSerial / global logic (e.g. splitTaskForLargeAngles) aligned with the Model menu.
+            config.model_ = self.configName.replace(' ', '')
+            try:
+                updatePostureTable()
+            except Exception:
+                pass
 
     def addFrame(self, currentRow):
         singleFrame = Frame(self.scrollable_frame, borderwidth=1, relief=RAISED)
@@ -1233,11 +1777,11 @@ class SkillComposer:
             if self.is6dof:
                 # Send only the actual Chero-like joint positions
                 cheroJoints = list(self.frameData[4:6]) + list(self.frameData[12:16])
-                send(ports, ['L', cheroJoints, 0.05])
+                self.composeSend(ports, ['L', cheroJoints, 0.05])
             else:
-                send(ports, ['L', self.frameData[4:20], 0.05])  # Send 16 joints for other models
+                self.composeSend(ports, ['L', self.frameData[4:20], 0.05])  # Send 16 joints for other models
         elif len(indexedList):
-            send(ports, ['I', indexedList, 0.05])
+            self.composeSend(ports, ['I', indexedList, 0.05])
 
     def setFrame(self, currentRow):
         frame = self.frameList[currentRow]
@@ -1647,13 +2191,13 @@ class SkillComposer:
                     self.canvasFace.itemconfig(self.eyes[c], fill=self.colorHex)
                     self.eyeColors[c+1] = colors
                     self.eyeBtn[c].config(text = str(colors))
-                send(ports, ['C', colors+[0,3], 0])
+                self.composeSend(ports, ['C', colors+[0,3], 0])
             else:
                 self.activeEye = i
                 self.canvasFace.itemconfig(self.eyes[i], fill=self.colorHex)
                 self.eyeColors[i+1] = colors
                 self.eyeBtn[i].config(text = str(colors))
-                send(ports, ['C', colors+[i+1,3], 0])
+                self.composeSend(ports, ['C', colors+[i+1,3], 0])
 
     def changeEffect(self,e):
         if self.colorBinderValue.get():
@@ -1664,11 +2208,11 @@ class SkillComposer:
                 self.canvasFace.itemconfig(self.eyes[c], fill=self.colorHex)
                 self.eyeColors[c+1] = colors
                 self.eyeBtn[c].config(text = str(colors))
-            send(ports, ['C', colors+[0, e], 0])
+            self.composeSend(ports, ['C', colors+[0, e], 0])
         else:
             colors = self.eyeColors[self.activeEye+1]
             self.eyeBtn[self.activeEye].config(text = str(colors))
-            send(ports, ['C', colors+[self.activeEye+1, e], 0])
+            self.composeSend(ports, ['C', colors+[self.activeEye+1, e], 0])
         
     def popEyeColor(self):
         #E_RGB_ALL = 0
@@ -1722,7 +2266,7 @@ class SkillComposer:
             wValue = 3
         for e in range(len(effectDictionary)):
             Button(btnsEff,text=txt(list(effectDictionary.keys())[e]),width = wValue,command = lambda eff=list(effectDictionary.values())[e]:self.changeEffect(eff)).grid(row = 0,column = e)
-        Button(btnsEff,text=txt('Meow'),width = wValue,command = lambda :send(ports, ['u', 0])).grid(row = 0,column = 3)
+        Button(btnsEff,text=txt('Meow'),width = wValue,command = lambda :self.composeSend(ports, ['u', 0])).grid(row = 0,column = 3)
         self.topEye.focus_force()  # the eye color edit window gets focus
         self.topEye.mainloop()
 
@@ -1752,15 +2296,13 @@ class SkillComposer:
 
     def mirrorAngles(self, singleFrame):
         if self.is6dof:
-            # For Chero-like (6 joints): specific mirror logic
-            if len(singleFrame) > 4 + 5:  # Ensure we have enough elements
-                # Mirror head pan (joint 0)
-                singleFrame[4 + 0] = -singleFrame[4 + 0]
-                # Head tilt (joint 1) stays the same
-                # Swap left/right shoulder joints (2,3)
-                singleFrame[4 + 2], singleFrame[4 + 3] = singleFrame[4 + 3], singleFrame[4 + 2]
-                # Swap left/right arm joints (4,5)  
-                singleFrame[4 + 4], singleFrame[4 + 5] = singleFrame[4 + 5], singleFrame[4 + 4]
+            # Chero/Mini stores 6 joints at frame indices 4,5 and 12..15 (not 4..9).
+            if len(singleFrame) > 15:
+                # Mirror head pan (joint 0) at frame[4]; head tilt at frame[5] unchanged.
+                singleFrame[4] = -singleFrame[4]
+                # Swap left/right pairs for limb joints at frame[12:16].
+                singleFrame[12], singleFrame[13] = singleFrame[13], singleFrame[12]
+                singleFrame[14], singleFrame[15] = singleFrame[15], singleFrame[14]
         else:
             # Original logic for 16-joint models
             singleFrame[1] = -singleFrame[1]
@@ -1794,9 +2336,9 @@ class SkillComposer:
         if self.is6dof:
             # Send only the actual Chero-like joint positions
             cheroJoints = list(self.frameData[4:6]) + list(self.frameData[12:16])
-            send(ports, ['L', cheroJoints, 0.05])
+            self.composeSend(ports, ['L', cheroJoints, 0.05])
         else:
-            send(ports, ['L', self.frameData[4:20], 0.05])
+            self.composeSend(ports, ['L', self.frameData[4:20], 0.05])
         
     def popCreator(self):
         self.creatorWin = Toplevel(self.window)
@@ -1997,7 +2539,7 @@ class SkillComposer:
         print(skillData)
         if period == 1:
             print(self.frameData[4:20])
-            send(ports, ['L', self.frameData[4:20], 0.05])
+            self.composeSend(ports, ['L', self.frameData[4:20], 0.05])
             return
         # Always handle Chero-like head pan (joint 0) separately: if exceeding range, divide by 2 for export only
         if self.is6dof and frameSize == 10:
@@ -2112,8 +2654,8 @@ class SkillComposer:
             flat_list = [item for sublist in skillData for item in sublist]
         print("Sending to robot:", flat_list)
 
-        send(ports, ['i', 0.1])
-        res = send(ports, ['K', flat_list, 0], 0)
+        self.composeSend(ports, ['i', 0.1])
+        res = self.composeSend(ports, ['K', flat_list, 0], 0)
         print(res)
 
     def restartSkillEditor(self):
@@ -2223,17 +2765,17 @@ class SkillComposer:
                     self.frameData[frame_idx] = value
                     if -126 < value < 126:
                         print(f"DEBUG: Sending I command for Chero-like joint {idx}: I {idx} {value}")
-                        send(ports, ['I', [idx, value], 0.05])
+                        self.composeSend(ports, ['I', [idx, value], 0.05])
                     else:
                         # Special handling for Chero-like joint 0 (head pan) - use m0 command for large angles
                         if idx == 0:
                             # Send ASCII 'm' with the original angle (no division by 2)
                             adjusted_angle = value
                             print(f"DEBUG: Sending m command for Chero-like head pan joint 0: m 0 {adjusted_angle}")
-                            send(ports, ['m', [0, adjusted_angle], 0.05])
+                            self.composeSend(ports, ['m', [0, adjusted_angle], 0.05])
                         else:
                             print(f"DEBUG: Sending i command for Chero-like joint {idx}: i {idx} {value}")
-                            send(ports, ['i', [idx, value], 0.05])
+                            self.composeSend(ports, ['i', [idx, value], 0.05])
                 else:
                     diff = value - self.frameData[frame_idx]
                     indexedList = list()
@@ -2257,14 +2799,14 @@ class SkillComposer:
                             # Clamp joint 0 to valid range for L command
                             cheroJoints[0] = max(min(joint0_angle, 125), -125)
                             print(f"DEBUG: Sending L command with clamped joint 0, then m command for large angle")
-                            send(ports, ['L', cheroJoints, 0.01])  # Send L command first with short delay
+                            self.composeSend(ports, ['L', cheroJoints, 0.01])  # Send L command first with short delay
                             # Then send separate m command for joint 0 with correct large angle
                             adjusted_angle = joint0_angle
                             print(f"DEBUG: Sending m command for Chero-like head pan joint 0: m 0 {adjusted_angle}")
-                            send(ports, ['m', [0, adjusted_angle], 0.05])
+                            self.composeSend(ports, ['m', [0, adjusted_angle], 0.05])
                         else:
                             print(f"DEBUG: Sending L command for all Chero-like joints: L {cheroJoints}")
-                            send(ports, ['L', cheroJoints, 0.05])
+                            self.composeSend(ports, ['L', cheroJoints, 0.05])
                     elif len(indexedList):
                         # Check if Chero-like joint 0 has large angle and handle separately
                         large_angle_joints = []
@@ -2278,22 +2820,22 @@ class SkillComposer:
                                 # Handle Chero-like joint 0 with large angle using m command (no division by 2)
                                 adjusted_angle = joint_angle
                                 print(f"DEBUG: Sending m command for bound Chero-like head pan joint 0: m 0 {adjusted_angle}")
-                                send(ports, ['m', [0, adjusted_angle], 0.05])
+                                self.composeSend(ports, ['m', [0, adjusted_angle], 0.05])
                             else:
                                 normal_joints.extend([joint_idx, joint_angle])
                         
                         # Send normal joints with I command if any remain
                         if normal_joints:
                             print(f"DEBUG: Sending I command for bound Chero joints: I {normal_joints}")
-                            send(ports, ['I', normal_joints, 0.05])
+                            self.composeSend(ports, ['I', normal_joints, 0.05])
             else:
                 # Original logic for other models
                 if self.binderValue[idx].get() == 0:
                     self.frameData[4 + idx] = value
                     if -126 < value < 126:
-                        send(ports, ['I', [idx, value], 0.05])
+                        self.composeSend(ports, ['I', [idx, value], 0.05])
                     else:
-                        send(ports, ['i', [idx, value], 0.05])
+                        self.composeSend(ports, ['i', [idx, value], 0.05])
                 else:
                     diff = value - self.frameData[4 + idx]
                     indexedList = list()
@@ -2303,10 +2845,10 @@ class SkillComposer:
                             indexedList += [i, self.frameData[4 + i]]
                             
                     if len(indexedList) > 10:
-                        send(ports, ['L', self.frameData[4:20], 0.05])
+                        self.composeSend(ports, ['L', self.frameData[4:20], 0.05])
                     else:
                         if len(indexedList):
-                            send(ports, ['I', indexedList, 0.05])
+                            self.composeSend(ports, ['I', indexedList, 0.05])
 
             self.indicateEdit()
             self.updateSliders(self.frameData)
@@ -2314,7 +2856,7 @@ class SkillComposer:
     def set6Axis(self, i, value):  # a more precise function should be based on inverse kinematics
         value = int(value)
         if self.ready == 1:
-            #            send(ports, ['t', [i, value], 0.0])
+            #            self.composeSend(ports, ['t', [i, value], 0.0])
             if self.originalAngle[0] == 0:
                 self.originalAngle[4:20] = copy.deepcopy(self.frameData[4:20])
                 self.originalAngle[0] = 1
@@ -2392,7 +2934,7 @@ class SkillComposer:
                 if j in negativeGroup:
                     self.frameData[4 + j] = self.originalAngle[4 + j] - int(value * factor)
 
-            send(ports, ['L', self.frameData[4:20], 0.05])
+            self.composeSend(ports, ['L', self.frameData[4:20], 0.05])
             self.updateSliders(self.frameData)
             self.indicateEdit()
 
@@ -2405,14 +2947,14 @@ class SkillComposer:
                 try:
                     token = serialCmd[0]
                     if token == 'S': #send everything as a string
-                        send(ports, [serialCmd[1:], 1])
+                        self.composeSend(ports, [serialCmd[1:], 1])
                     else:
                         cmdList = serialCmd[1:].replace(',',' ').split()
                         if len(cmdList) <= 1:
-                            send(ports, [serialCmd, 1])
+                            self.composeSend(ports, [serialCmd, 1])
                         else:
                             cmdList = list(map(lambda x:int(x),cmdList))
-                            send(ports, [token, cmdList, 1])
+                            self.composeSend(ports, [token, cmdList, 1])
                         self.newCmd.set('')
                 except Exception as e:
                     logger.info("Exception")
@@ -2460,10 +3002,10 @@ class SkillComposer:
                 for i in range(6):
                     self.values[16 + i].set(0)
             
-            send(ports,['i',0])
-            send(ports, ['k' + pose, 0])
+            self.composeSend(ports,['i',0])
+            self.composeSend(ports, ['k' + pose, 0])
 #            if pose == 'rest':
-#                send(ports, ['d', 0])
+#                self.composeSend(ports, ['d', 0])
 
     def setStep(self):
         self.frameData[20] = self.getWidget(self.activeFrame, cStep).get()
@@ -2537,7 +3079,7 @@ class SkillComposer:
             key = list(dialTable)[i]
             if key == 'Connect':
                 if self.keepChecking:
-                    send(ports, ['b', [10, 90], 0], 1)
+                    self.composeSend(ports, ['b', [10, 90], 0], 1)
                     closeAllSerial(goodPorts)
                     # self.portMenu.config(state = DISABLED)
                     # self.updatePortMenu()
@@ -2557,20 +3099,25 @@ class SkillComposer:
                     #                    self.createPortMenu()
 
                     self.keepChecking = True
-                    t = threading.Thread(target=keepCheckingPort, args=(goodPorts,lambda:self.keepChecking,lambda:True,self.updatePortMenu,))
+                    t = threading.Thread(
+                        target=keepCheckingPort,
+                        args=(goodPorts, lambda: self.keepChecking, True, self.updatePortMenu),
+                        kwargs={"probe_new_ports": lambda: not self._ws_ready()},
+                    )
                     t.daemon = True
                     t.start()
-                    send(ports, ['b', [10, 90], 0])
+                    self.composeSend(ports, ['b', [10, 90], 0])
                     if len(goodPorts) > 0:
                         self.frameDial.winfo_children()[1].config(text=txt('Connected'), fg='green')
                         self.deacGyro()
+                        self.window.after(800, self.sync_ui_from_hardware_model_after_connect)
                         # for b in buttons:
                         #     b.config(state = NORMAL)
                     else:
                         self.frameDial.winfo_children()[1].config(text=txt('Listening'), fg='orange')
                 # self.frameDial.winfo_children()[1].update()
                 self.updatePortMenu()
-            elif len(goodPorts) > 0:
+            elif len(goodPorts) > 0 or self._ws_ready():
                 # print("dialState")
                 # for j in range(4):
                 #     printH(list(dialTable)[j], self.dialValue[j].get())
@@ -2579,14 +3126,14 @@ class SkillComposer:
                 if key == 'Gyro' and self.boardVer and len(self.boardVer) > 0 and self.boardVer[0] == 'B':
                     # printH("Button state:", self.dialValue[2].get())
                     if self.dialValue[2].get():
-                        result = send(ports, ['gB', 0])
+                        result = self.composeSend(ports, ['gB', 0])
                         # printH("result", result)
                         if result != -1:  # and result[0][0] == 'G':
                             self.frameDial.winfo_children()[3].config(fg='green')
                         else:
                             self.buttDialAct(2, False)
                     else:
-                        result = send(ports, ['gb', 0])
+                        result = self.composeSend(ports, ['gb', 0])
                         # printH("result", result)
                         if result != -1:  # and result[0][0] == 'g':
                             self.frameDial.winfo_children()[3].config(fg='red')
@@ -2594,7 +3141,7 @@ class SkillComposer:
                             self.buttDialAct(2, True)
                     # printH("gyroFlag", self.dialValue[2].get())
                 else:
-                    result = send(ports, [dialTable[key], 0])
+                    result = self.composeSend(ports, [dialTable[key], 0])
                     if result != -1:
                         state = result[0].replace('\r', '').replace('\n', '')
                         if state == 'k':
@@ -2616,6 +3163,7 @@ class SkillComposer:
         if messagebox.askokcancel(txt('Quit'), txt('Do you want to quit?')):
             self.saveConfig(defaultConfPath)
             self.keepChecking = False  # close the background thread for checking serial port
+            self._disconnect_websocket()
             self.window.destroy()
             closeAllSerial(goodPorts)
             os._exit(0)
