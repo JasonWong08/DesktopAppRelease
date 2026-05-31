@@ -27,7 +27,7 @@ class Debugger:
             if time.time() - start > 5:
                 config.model_ = model    # If can not get the model name, use the model set in the UI interface.
             time.sleep(0.01)
-        self.configName = config.model_
+        self.configName = normalizeModelName(config.model_)
         
         # Load configuration from file
         try:
@@ -286,8 +286,8 @@ class Debugger:
 
     def changeModel(self, modelName):
         if self.debuggerReady and modelName != self.configName:
-            self.configName = modelName
-            self.modelLabel.configure(text=modelName)
+            self.configName = normalizeModelName(modelName)
+            self.modelLabel.configure(text=displayName(self.configName))
             # Save configuration
             self.saveConfig(defaultConfPath)
         

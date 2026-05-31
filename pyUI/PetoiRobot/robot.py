@@ -173,7 +173,7 @@ def deacGyro():
                 # modelName = None
                 
                 for l in range(len(parse)):
-                    if 'Nybble' in parse[l] or 'Bittle' in parse[l] or 'DoF16' in parse[l] or 'Chero' in parse[l]:
+                    if 'Nybble' in parse[l] or 'Bittle' in parse[l] or 'DoF16' in parse[l] or 'Chero' in parse[l] or 'Quaddle' in parse[l] or 'Mini' in parse[l]:
                         # modelName = parse[l]
                         boardVer = parse[l+1]
                         # print(f'Port {portName}: {modelName}')

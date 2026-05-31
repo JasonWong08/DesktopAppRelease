@@ -61,7 +61,7 @@ parameterWinSet = {
     "BittleX+Arm": BittleRWinSet,
     "DoF16": RegularWinSet,
     "Chero": CheroWinSet,
-    "Mini": CheroWinSet,
+    "Quaddle": CheroWinSet,
 }
 
 parameterMacSet = {
@@ -70,7 +70,7 @@ parameterMacSet = {
     "BittleX+Arm": BittleRMacSet,
     "DoF16": RegularMacSet,
     "Chero": CheroMacSet,
-    "Mini": CheroMacSet,
+    "Quaddle": CheroMacSet,
 }
 
 frontJointIdx = [4, 5, 8, 9, 12, 13]
@@ -91,7 +91,7 @@ class Calibrator:
                 config.version_ = "N_210101"
                 print('Use the model set in the UI interface.')
             time.sleep(0.01)
-        self.configName = config.model_
+        self.configName = normalizeModelName(config.model_)
         self.boardVersion = config.version_
         # printH('boardVersion:', self.boardVersion)
         config.model_ = config.model_.replace(' ', '')
@@ -100,8 +100,8 @@ class Calibrator:
         elif config.model_ == 'NybbleQ':
             self.model = 'Nybble'
         else:
-            self.model = config.model_
-        self.is6dof = self.model in ('Chero', 'Mini')
+            self.model = normalizeModelName(config.model_)
+        self.is6dof = self.model in ('Chero', 'Quaddle')
 
         self.winCalib = Tk()
         self.winCalib.title(txt('calibTitle'))
@@ -160,7 +160,7 @@ class Calibrator:
             # self.parameterSet = parameterSet['Regular']
             scaleNames = RegularScaleNames
 
-        # Use actual model name for images (Mini has its own copies)
+        # Use actual model name for images (Quaddle has its own copies)
         modelForImage = config.model_
 
         if "B" in self.boardVersion and config.model_ != 'DoF16':

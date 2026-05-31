@@ -63,7 +63,7 @@ def serialWriteNumToByte(port, token, var=None):  # Only to be used for c m u b 
             skillHeader = 7
             
         # Determine frame size based on robot model
-        if hasattr(config, 'model_') and config.model_ and 'Chero' in config.model_ or 'Mini' in config.model_:
+        if hasattr(config, 'model_') and config.model_ and ('Chero' in config.model_ or 'Quaddle' in config.model_ or 'Mini' in config.model_):
             maxJoints = 6
         else:
             maxJoints = 16
@@ -403,13 +403,13 @@ def splitTaskForLargeAngles(task):
         if token == 'L':
             model_str = getattr(config, 'model_', None) or ''
             is_chero_mini = bool(model_str) and (
-                'Chero' in model_str or 'Mini' in model_str
+                'Chero' in model_str or 'Quaddle' in model_str or 'Mini' in model_str
             )
             # Chero-like UI always sends exactly 6 angles; do not rely on config.model_
             # (may be unset before connect), or we take the 16-joint branch and index past len-1.
             is_six_joint_l = len(var) == 6
             if is_chero_mini or is_six_joint_l:
-                # Six packed joint values; byte wire must stay in [-128, 127]. Mini legs can exceed 125.
+                # Six packed joint values; byte wire must stay in [-128, 127]. Quaddle legs can exceed 125.
                 for idx in range(min(6, len(var))):
                     angle = var[idx]
                     if angle < -125 or angle > 125:
@@ -651,7 +651,7 @@ postureDict = {
     'BittleX+Arm': postureTableBittleR,
     'DoF16': postureTableDoF16,
     'Chero': postureTableDoF6,
-    'Mini': postureTableDoF6
+    'Quaddle': postureTableDoF6
 }
 
 skillFullName = {
@@ -714,8 +714,8 @@ def schedulerToSkill(ports, testSchedule):
         if 'Chero' in config.model_:
             currentPostureTable = postureDict['Chero']
             numJoints = 6
-        elif 'Mini' in config.model_:
-            currentPostureTable = postureDict['Mini']
+        elif 'Quaddle' in config.model_ or 'Mini' in config.model_:
+            currentPostureTable = postureDict['Quaddle']
             numJoints = 6
         elif 'Nybble' in config.model_:
             currentPostureTable = postureDict['Nybble']
@@ -777,29 +777,35 @@ def schedulerToSkill(ports, testSchedule):
     #    sendTaskParallel(['K', newSkill, 1])
     send(ports, ['K', newSkill, 1])
 
+def _line_has_known_model(line):
+    return ('Nybble' in line or 'Bittle' in line or 'DoF16' in line or 'Chero' in line
+            or 'Quaddle' in line or 'Mini' in line)
+
+
 def getModelAndVersion(result):
-    if result != -1:
-        parse = result[1].replace('\r','').split('\n')
-        for l in range(len(parse)):
-            if 'Nybble' in parse[l] or 'Bittle' in parse[l] or 'DoF16' in parse[l] or 'Chero' in parse[l] or 'Mini' in parse[l]:
-                config.model_ = parse[l]
-                config.version_ = parse [l+1]
-                config.modelList += [config.model_]
-                print(config.model_)
-                print(config.version_)
-                updatePostureTable()
-                return
-    config.model_ = 'Bittle'
-    config.version_ = 'Unknown'
-    # printH("@aaa config.version_:", config.version_)
+    """Update config.model_/version_ only when the reply contains a known product name."""
+    if result == -1:
+        return False
+    parse = result[1].replace('\r', '').split('\n')
+    for l in range(len(parse)):
+        if _line_has_known_model(parse[l]):
+            config.model_ = normalizeModelName(parse[l].strip())
+            if l + 1 < len(parse):
+                config.version_ = parse[l + 1].strip()
+            config.modelList += [config.model_]
+            print(config.model_)
+            print(config.version_)
+            updatePostureTable()
+            return True
+    return False
     
 def updatePostureTable():
     global postureTable
     if hasattr(config, 'model_') and config.model_:
         if 'Chero' in config.model_:
             postureTable = postureDict['Chero']
-        elif 'Mini' in config.model_:
-            postureTable = postureDict['Mini']
+        elif 'Quaddle' in config.model_ or 'Mini' in config.model_:
+            postureTable = postureDict['Quaddle']
         elif 'Nybble' in config.model_:
             postureTable = postureDict['Nybble']
         elif 'DoF16' in config.model_:
@@ -1361,10 +1367,17 @@ def replug(PortList, needSendTask=True, needOpenPort=True):
                                         time.sleep(2)
                                         result = sendTask(PortList, serialObject, ['?', 0])
                                         # printH("@aaa result:", result)
-                                        getModelAndVersion(result)
-                                        # Check if device info was successfully retrieved
-                                        if config.version_ != '' and config.version_ != 'Unknown':
+                                        model_ok = getModelAndVersion(result)
+                                        # Port is valid if we got a reply with board version or a known model name
+                                        if model_ok:
                                             device_info_success[0] = True
+                                        elif result != -1:
+                                            for line in result[1].replace('\r', '').split('\n'):
+                                                s = line.strip()
+                                                if s.startswith('NyBoard') or s.startswith('BiBoard'):
+                                                    config.version_ = s
+                                                    device_info_success[0] = True
+                                                    break
                                     except Exception as e:
                                         logger.error(f"Error getting device info: {e}")
                                     finally:

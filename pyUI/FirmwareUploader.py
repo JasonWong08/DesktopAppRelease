@@ -171,7 +171,7 @@ class Uploader:
                 # f.close()
             lines = [line.split('\n')[0] for line in lines]    # remove the '\n' at the end of each line
             self.defaultLan = lines[0]
-            self.configName = lines[1]
+            self.configName = normalizeModelName(lines[1])
             strDefaultPath = lines[2]
             strSwVersion = lines[3]
             strBdVersion = lines[4]

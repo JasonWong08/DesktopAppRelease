@@ -141,7 +141,7 @@ modelOptions = [
     'Bittle X+Arm',
     'DoF16',
     'Chero',
-    'Mini'
+    'Quaddle'
 ]
 
 NaJoints = {
@@ -151,7 +151,7 @@ NaJoints = {
     'BittleX+Arm': [3, 4, 5, 6, 7],
     'DoF16' : [],
     'Chero' : [],
-    'Mini' : []
+    'Quaddle' : []
 }
 
 BittleRScaleNames = [
@@ -166,7 +166,7 @@ RegularScaleNames = [
     'Arm', 'Arm', 'Arm', 'Arm',
     'Knee', 'Knee', 'Knee', 'Knee']
 
-# For 6-DoF models (Chero / Mini)
+# For 6-DoF models (Chero / Quaddle)
 DoF6ScaleNames = [
     'Head Pan', 'Head Tilt',
     'Shoulder', 'Shoulder', 'Shoulder', 'Shoulder'
@@ -178,14 +178,21 @@ scaleNames = {
     'BittleX+Arm': BittleRScaleNames,
     'DoF16': RegularScaleNames,
     'Chero': DoF6ScaleNames,
-    'Mini': DoF6ScaleNames
+    'Quaddle': DoF6ScaleNames
 }
 
 sideNames = ['Left Front', 'Right Front', 'Right Back', 'Left Back']
 
 ports = []
 
+def normalizeModelName(name):
+    """Map legacy product id Mini to Quaddle."""
+    if name == 'Mini':
+        return 'Quaddle'
+    return name
+
 def displayName(name):
+    name = normalizeModelName(name)
     if 'Bittle' in name and 'Bittle' != name:
         s = name.replace(' ','')
         name = 'Bittle'+' '+s[6:]

@@ -66,7 +66,7 @@ class UI:
                 self.defaultLan = 'English'
             
             # Validate and set other configuration values with defaults
-            self.configName = lines[1] if len(lines) > 1 and lines[1].strip() else 'Bittle'
+            self.configName = normalizeModelName(lines[1] if len(lines) > 1 and lines[1].strip() else 'Bittle')
             self.defaultPath = lines[2] if len(lines) > 2 and lines[2].strip() else releasePath[:-1]
             self.defaultSwVer = lines[3] if len(lines) > 3 and lines[3].strip() else '2.0'
             if len(lines) > 4 and lines[4].strip():
@@ -109,7 +109,7 @@ class UI:
         self.window.title(txt('uiTitle'))
         self.createMenu()
         bw = 23
-        self.modelLabel = Label(self.window, text=displayName(self.configName), font=self.myFont)
+        self.modelLabel = Label(self.window, text=displayName(normalizeModelName(self.configName)), font=self.myFont)
         self.modelLabel.grid(row=0, column=0, pady=10)
         for i in range(len(apps)):
             self.moduleButton = Button(self.window, text=txt(apps[i]), font=self.myFont, fg='blue', width=bw, relief='raised',
@@ -145,8 +145,8 @@ class UI:
         self.window.config(menu=self.menubar)
 
     def changeModel(self, modelName):
-        self.configName = copy.deepcopy(modelName)
-        self.modelLabel.configure(text=self.configName)
+        self.configName = copy.deepcopy(normalizeModelName(modelName))
+        self.modelLabel.configure(text=displayName(self.configName))
         print(self.configName)
         if self.configName == "Bittle X":
             if 'NyBoard' in self.defaultBdVer:

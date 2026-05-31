@@ -251,7 +251,7 @@ axisDisable = {
     'BittleX+Arm': [0, 5],
     'DoF16' : [],
     'Chero' : [],
-    'Mini' : []
+    'Quaddle' : []
 }
 
 jointConfig = {
@@ -259,7 +259,7 @@ jointConfig = {
     'Bittle': '>>',
     'DoF16': '>>',
     'Chero': '>>',
-    'Mini': '>>'
+    'Quaddle': '>>'
 }
 triggerAxis = {
     0: 'None',
@@ -404,7 +404,7 @@ parameterWinSet = {
     "BittleX+Arm": BittleRWinSet,
     "DoF16": DoF16WinSet,
     "Chero": CheroWinSet,
-    "Mini": CheroWinSet,
+    "Quaddle": CheroWinSet,
 }
 
 parameterMacSet = {
@@ -414,7 +414,7 @@ parameterMacSet = {
     "BittleX+Arm": BittleRMacSet,
     "DoF16": DoF16MacSet,
     "Chero": CheroMacSet,
-    "Mini": CheroMacSet,
+    "Quaddle": CheroMacSet,
 }
 
 # word_file = '/usr/share/dict/words'
@@ -436,15 +436,15 @@ class SkillComposer:
                 config.model_ = model
                 print('Use the model set in the UI interface.')
             time.sleep(0.01)
-        self.configName = config.model_
+        self.configName = normalizeModelName(config.model_)
         config.model_ = config.model_.replace(' ','')
         if config.model_== 'BittleX':
             self.model = 'Bittle'
         elif config.model_== 'NybbleQ':
             self.model = 'Nybble'
         else:
-            self.model = config.model_
-        self.is6dof = self.model in ('Chero','Mini')
+            self.model = normalizeModelName(config.model_)
+        self.is6dof = self.model in ('Chero','Quaddle')
         try:
             with open(defaultConfPath, "r", encoding="utf-8") as f:
                 lines = f.readlines()
@@ -752,9 +752,9 @@ class SkillComposer:
                 elif i == 1:  # Head tilt joint
                     from_val = -5
                     to_val = 125
-                elif i in [2, 3, 4, 5] and self.model == 'Mini':
-                    mini_leg_ranges = {2: (-230, 70), 3: (-230, 70), 4: (-50, 250), 5: (-50, 250)}
-                    from_val, to_val = mini_leg_ranges[i]
+                elif i in [2, 3, 4, 5] and self.model == 'Quaddle':
+                    quaddle_leg_ranges = {2: (-230, 70), 3: (-230, 70), 4: (-50, 250), 5: (-50, 250)}
+                    from_val, to_val = quaddle_leg_ranges[i]
                 elif i in [2, 3, 4, 5] and self.model == 'Chero':
                     chero_leg_ranges = {2: (-85, 70), 3: (-85, 70), 4: (-80, 85), 5: (-80, 85)}
                     from_val, to_val = chero_leg_ranges[i]
@@ -1022,6 +1022,7 @@ class SkillComposer:
         for b in buttons:
             b.config(state=dialBtnStt)
         self.portMenu.config(state=portMenuStt)
+        self._sync_wifi_button_from_connection()
         prev_n = self._prev_good_port_count
         self._prev_good_port_count = len(goodPorts)
         if len(goodPorts) > 0 and prev_n == 0:
@@ -1101,6 +1102,18 @@ class SkillComposer:
     def _ws_ready(self):
         return self.ws_client is not None and self.ws_client.is_connected
 
+    def _set_wifi_button_state(self, connected):
+        if not self.wifiConnectButton:
+            return
+        if connected:
+            self.wifiConnectButton.config(text=txt("wifiWsConnected"), fg="green")
+        else:
+            self.wifiConnectButton.config(text=txt("wifiWsConnect"), fg="blue")
+
+    def _sync_wifi_button_from_connection(self):
+        """Keep WiFi OK button aligned with actual WebSocket state."""
+        self._set_wifi_button_state(self._ws_ready())
+
     def composeSend(self, port, task, timeout=0):
         queue = splitTaskForLargeAngles(task)
         last = -1
@@ -1130,6 +1143,7 @@ class SkillComposer:
         if delay > 0:
             time.sleep(delay)
         if body is False:
+            self._disconnect_websocket()
             return -1
         line = "k"
         if body:
@@ -1145,8 +1159,7 @@ class SkillComposer:
         if self.ws_client:
             self.ws_client.disconnect()
             self.ws_client = None
-        if self.wifiConnectButton:
-            self.wifiConnectButton.config(text=txt("wifiWsConnect"))
+        self._set_wifi_button_state(False)
         try:
             self.updatePortMenu()
         except Exception:
@@ -1165,8 +1178,7 @@ class SkillComposer:
         self._disconnect_websocket()
         self.ws_client = SkillComposerWSClient(ip, 81)
         if self.ws_client.connect():
-            if self.wifiConnectButton:
-                self.wifiConnectButton.config(text=txt("wifiWsConnected"))
+            self._set_wifi_button_state(True)
             self.updatePortMenu()
             self._wifi_schedule_model_query_after_connect()
             # If '?' is slow or empty on first try, re-check config after board info may arrive
@@ -1190,8 +1202,8 @@ class SkillComposer:
             return 'DoF16'
         if 'Chero' in line:
             return 'Chero'
-        if 'Mini' in line:
-            return 'Mini'
+        if 'Mini' in line or 'Quaddle' in line:
+            return 'Quaddle'
         if 'Bittle' in line:
             compact = line.replace(' ', '')
             if 'X+Arm' in compact or 'X+ARM' in compact.upper():
@@ -1202,14 +1214,18 @@ class SkillComposer:
         return None
 
     def _apply_wifi_board_info_text(self, body):
-        """Parse WiFi '?' reply like serial; then sync Model menu / layout to config.model_."""
+        """Parse WiFi '?' reply like serial; sync UI only when a model name is recognized."""
         if body is False or body is None:
             text = ""
         else:
             text = str(body).strip()
+        model_ok = False
         if text:
-            getModelAndVersion(['?', text])
-        self.sync_ui_from_hardware_model_after_connect()
+            model_ok = getModelAndVersion(['?', text])
+        if model_ok:
+            self.sync_ui_from_hardware_model_after_connect()
+        else:
+            logger.debug("WiFi ? reply has no recognized model; keeping current UI selection")
 
     def _wifi_fetch_banner_over_ws(self, client):
         """Issue '?' like UART wire; try several command strings the bridge may expect."""
@@ -1249,7 +1265,12 @@ class SkillComposer:
             def apply():
                 if self.ws_client is not client:
                     return
+                if not client.is_connected:
+                    self._disconnect_websocket()
+                    return
                 self._apply_wifi_board_info_text(body)
+                if not client.is_connected:
+                    self._disconnect_websocket()
 
             try:
                 self.window.after(0, apply)
@@ -1477,7 +1498,7 @@ class SkillComposer:
         imgWidth = self.parameterSet['imgWidth']              # The width of image
         rowSpan = self.parameterSet['imgRowSpan']             # The number of lines occupied by the image frame
 
-        # Use model-specific image (Mini has its own copy)
+        # Use model-specific image (Quaddle has its own copy)
         imgFile = resourcePath + model + '.jpeg'
 
         # Create image normally
@@ -1576,7 +1597,7 @@ class SkillComposer:
 
     def changeModel(self, model):
         if self.ready and model != self.model:
-            self.configName = model
+            self.configName = normalizeModelName(model)
             model = model.replace(' ', '')
             if 'Bittle' in model and model != "BittleX+Arm": # Bittle or Bittle X will be Bittle
                 model = 'Bittle'
@@ -1584,8 +1605,8 @@ class SkillComposer:
             elif model == 'NybbleQ':
                 self.model = copy.deepcopy('Nybble')
             else:
-                self.model = copy.deepcopy(model)
-            self.is6dof = self.model in ('Chero','Mini')
+                self.model = copy.deepcopy(normalizeModelName(model))
+            self.is6dof = self.model in ('Chero','Quaddle')
             self.postureTable = postureDict[self.model]
             self.framePosture.destroy()
             self.frameImage.destroy()
