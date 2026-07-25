@@ -2164,16 +2164,30 @@ class SkillComposer:
         entryFrame = Frame(top)
         entryFrame.grid(row=1, column=0, columnspan=4, padx=10, pady=10)
         self.skillText = Text(entryFrame, width=120, spacing1=2)
-        self.skillText.insert('1.0', txt('exampleFormat')
-                              + '\n\nconst int8_t hi[] PROGMEM ={\n\
-            -5,  0,   0, 1,\n\
-             1,  2,   3,\n\
-             0,-20, -60,   0,   0,   0,   0,   0,  35,  30, 120, 105,  75,  60, -40, -30,     4, 2, 0, 0,\n\
-            35, -5, -60,   0,   0,   0,   0,   0, -75,  30, 125,  95,  40,  75, -45, -30,    10, 0, 0, 0,\n\
-            40,  0, -35,   0,   0,   0,   0,   0, -60,  30, 125,  95,  60,  75, -45, -30,    10, 0, 0, 0,\n\
-             0,  0, -45,   0,  -5,  -5,  20,  20,  45,  45, 105, 105,  45,  45, -45, -45,     8, 0, 0, 0,\n\
-             0,  0,   0,   0,   0,   0,   0,   0,  30,  30,  30,  30,  30,  30,  30,  30,     5, 0, 0, 0,\n\
-        };')
+        if self.model in ('Chero', 'Quaddle'):
+            hiExample = """const int8_t hi[] PROGMEM ={
+            -8,   0,   0,   2,
+             2,   3,   3,
+             0,   0,   0,   0,  10,  10,   8,   0,   0,   0,
+             0,   0,   4,   4, -13, -13,   8,   0,   0,   0,
+             0,   0,  15, -54,   7,  -2,   8,   0,   0,   0,
+             0,   0,  15, -30,   7,  -2,   8,   0,   0,   0,
+             0,   0,  -8,  15,   7, -22,   8,   1,   0,   0,
+             0,   0,  10, -20,  65, -13,   4,   1,   0,   0,
+             0,   0,  10,   2,  22,  34,   4,   0,   0,   0,
+             0,   0,   5,   5,  12,  12,   8,   0,   0,   0,
+        };"""
+        else:
+            hiExample = """const int8_t hi[] PROGMEM ={
+            -5,  0,   0, 1,
+             1,  2,   3,
+             0,-20, -60,   0,   0,   0,   0,   0,  35,  30, 120, 105,  75,  60, -40, -30,     4, 2, 0, 0,
+            35, -5, -60,   0,   0,   0,   0,   0, -75,  30, 125,  95,  40,  75, -45, -30,    10, 0, 0, 0,
+            40,  0, -35,   0,   0,   0,   0,   0, -60,  30, 125,  95,  60,  75, -45, -30,    10, 0, 0, 0,
+             0,  0, -45,   0,  -5,  -5,  20,  20,  45,  45, 105, 105,  45,  45, -45, -45,     8, 0, 0, 0,
+             0,  0,   0,   0,   0,   0,   0,   0,  30,  30,  30,  30,  30,  30,  30,  30,     5, 0, 0, 0,
+        };"""
+        self.skillText.insert('1.0', txt('exampleFormat') + '\n\n' + hiExample)
         self.skillText.grid(row=0, column=0)
         # Create an Entry Widget in the Toplevel window
         Button(top, text=txt('Open File'), width=10, command=lambda: self.openFile(top)).grid(row=0, column=0)
