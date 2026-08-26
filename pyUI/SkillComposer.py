@@ -1226,6 +1226,22 @@ class SkillComposer:
             self.sync_ui_from_hardware_model_after_connect()
         else:
             logger.debug("WiFi ? reply has no recognized model; keeping current UI selection")
+        self._disable_random_and_gyro_after_connect()
+
+    def _disable_random_and_gyro_after_connect(self):
+        """After WiFi identify Chero/Quaddle, send z0 and gb to stop random motion and gyro."""
+        model = getattr(config, 'model_', None) or getattr(self, 'model', '') or getattr(self, 'configName', '')
+        if not isCheroLikeModel(model):
+            return
+        try:
+            self.composeSend(ports, ['z0', 0])
+            self.composeSend(ports, ['gb', 0])
+            if len(self.dialValue) > 3:
+                self.buttDialAct(3, False)
+                self.buttDialAct(2, False)
+            logger.info("Chero/Quaddle WiFi: sent z0 and gb (random off, gyro off)")
+        except Exception as e:
+            logger.debug(f"disable random/gyro after WiFi connect failed: {e}")
 
     def _wifi_fetch_banner_over_ws(self, client):
         """Issue '?' like UART wire; try several command strings the bridge may expect."""
@@ -1652,6 +1668,50 @@ class SkillComposer:
             except Exception:
                 pass
 
+    def _spinbox_arrow_at(self, sb, x, y):
+        try:
+            elem = sb.identify(x, y)
+            if elem in ('buttonup', 'buttondown'):
+                return elem
+        except Exception:
+            pass
+        try:
+            w = sb.winfo_width()
+            h = sb.winfo_height()
+        except Exception:
+            return None
+        if w <= 0 or h <= 0 or x < w - 18:
+            return None
+        return 'buttonup' if y < h / 2.0 else 'buttondown'
+
+    def _one_click_spinbox(self, sb):
+        """One complete click (press + release) changes the value once; holding does not auto-repeat."""
+        sb.configure(repeatdelay=0, repeatinterval=0)
+        pending = {'arrow': None}
+
+        def on_press(event):
+            arrow = self._spinbox_arrow_at(sb, event.x, event.y)
+            pending['arrow'] = arrow
+            if arrow:
+                return 'break'
+
+        def on_release(event):
+            arrow = pending['arrow']
+            pending['arrow'] = None
+            if not arrow:
+                return
+            try:
+                sb.tk.call('tk::CancelRepeat')
+            except Exception:
+                pass
+            try:
+                sb.invoke(arrow)
+            except Exception:
+                pass
+
+        sb.bind('<ButtonPress-1>', on_press, add='+')
+        sb.bind('<ButtonRelease-1>', on_release, add='+')
+
     def addFrame(self, currentRow):
         singleFrame = Frame(self.scrollable_frame, borderwidth=1, relief=RAISED)
 
@@ -1669,26 +1729,30 @@ class SkillComposer:
                            command=lambda idx=currentRow: self.setFrame(idx))
 
         vStep = StringVar()
-        Spinbox(singleFrame, width=self.frameItemWidth[cStep],
-                values=('1', '2', '4', '8', '12', '16', '32', '48', '64', txt('max')), textvariable=vStep, wrap=True).grid(
-            row=0, column=cStep)
+        spStep = Spinbox(singleFrame, width=self.frameItemWidth[cStep],
+                values=('1', '2', '4', '8', '12', '16', '32', '48', '64', txt('max')), textvariable=vStep, wrap=True)
+        spStep.grid(row=0, column=cStep)
+        self._one_click_spinbox(spStep)
 
         vTrig = StringVar()
         spTrig = Spinbox(singleFrame, width=self.frameItemWidth[cTrig], values=list(map(lambda x:txt(x),triggerAxis.values())),
                          textvariable=vTrig, wrap=True)
         spTrig.grid(row=0, column=cTrig)
+        self._one_click_spinbox(spTrig)
 
         vAngle = IntVar()
-        Spinbox(singleFrame, width=self.frameItemWidth[cAngle], from_=-128, to=127, textvariable=vAngle,
-                wrap=True).grid(
-            row=0, column=cAngle)
-            
+        spAngle = Spinbox(singleFrame, width=self.frameItemWidth[cAngle], from_=-128, to=127, textvariable=vAngle,
+                wrap=True)
+        spAngle.grid(row=0, column=cAngle)
+        self._one_click_spinbox(spAngle)
+
         vDelay = IntVar()
         delayOption = list(range(0, 100, 50)) + list(range(100, 1000, 100)) + list(range(1000, 6001, 1000))
 
-        Spinbox(singleFrame, width=self.frameItemWidth[cDelay], values=delayOption, textvariable=vDelay,
-                wrap=True).grid(
-            row=0, column=cDelay)
+        spDelay = Spinbox(singleFrame, width=self.frameItemWidth[cDelay], values=delayOption, textvariable=vDelay,
+                wrap=True)
+        spDelay.grid(row=0, column=cDelay)
+        self._one_click_spinbox(spDelay)
 
         vNote = StringVar()
         #        letters = string.ascii_lowercase + string.ascii_uppercase + string.digits

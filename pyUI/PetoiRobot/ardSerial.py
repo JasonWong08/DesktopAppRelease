@@ -37,7 +37,7 @@ if config.SHOW_GUI:
     def txt(key):
         return language.get(key, textEN[key])
 
-ardSerialDate = "Dec. 16, 2025"
+ardSerialDate = "Aug. 26, 2026"
 logger.info(f"ardSerial date: {ardSerialDate}")
 
 def encode(in_str, encoding='utf-8'):
@@ -174,7 +174,7 @@ def serialWriteByte(port, var=None):
             var.insert(1, var[0][1:])
         var[1:] = list(map(int, var[1:]))
         in_str = token.encode() + struct.pack('b' * (len(var) - 1), *var[1:]) + '~'.encode()
-    elif token == 'w' or token == 'k' or token == 'X' or token == 'g':
+    elif token == 'w' or token == 'k' or token == 'X' or token == 'g' or token == 'z':
         in_str = var[0] + '\n'
     else:
         in_str = token + '\n'
@@ -276,7 +276,7 @@ def _build_serialWriteByte_payload(var=None):
             var.insert(1, var[0][1:])
         var[1:] = list(map(int, var[1:]))
         return token.encode() + struct.pack('b' * (len(var) - 1), *var[1:]) + b'~'
-    if token == 'w' or token == 'k' or token == 'X' or token == 'g':
+    if token == 'w' or token == 'k' or token == 'X' or token == 'g' or token == 'z':
         return encode(var[0] + '\n')
     return encode(token + '\n')
 
@@ -798,7 +798,25 @@ def getModelAndVersion(result):
             updatePostureTable()
             return True
     return False
-    
+
+def isCheroLikeModel(model=None):
+    """True for Chero / Quaddle (legacy Mini)."""
+    model_str = model if model is not None else (getattr(config, 'model_', None) or '')
+    return bool(model_str) and (
+        'Chero' in model_str or 'Quaddle' in model_str or 'Mini' in model_str
+    )
+
+def disableRandomAndGyroFor6DoF(PortList, serialObject):
+    """After serial connect, send z0 and gb on Chero/Quaddle to stop random motion and gyro."""
+    if not serialObject or not isCheroLikeModel():
+        return
+    try:
+        sendTask(PortList, serialObject, ['z0', 0])
+        sendTask(PortList, serialObject, ['gb', 0])
+        logger.info("Chero/Quaddle: sent z0 and gb (random off, gyro off)")
+    except Exception as e:
+        logger.debug(f"disableRandomAndGyroFor6DoF failed: {e}")
+
 def updatePostureTable():
     global postureTable
     if hasattr(config, 'model_') and config.model_:
@@ -853,7 +871,8 @@ def testPort(PortList, serialObject, p):
                 logger.debug(f"Adding in testPort: {p}")
                 PortList.update({serialObject: p})
                 goodPortCount += 1
-                getModelAndVersion(result)
+                if getModelAndVersion(result):
+                    disableRandomAndGyroFor6DoF(PortList, serialObject)
             else:
                 serialObject.Close_Engine()
                 print('* Port ' + p + ' is not connected to a Petoi device!')
@@ -1371,6 +1390,7 @@ def replug(PortList, needSendTask=True, needOpenPort=True):
                                         # Port is valid if we got a reply with board version or a known model name
                                         if model_ok:
                                             device_info_success[0] = True
+                                            disableRandomAndGyroFor6DoF(PortList, serialObject)
                                         elif result != -1:
                                             for line in result[1].replace('\r', '').split('\n'):
                                                 s = line.strip()
@@ -1480,7 +1500,8 @@ def selectList(PortList,ls,win, portMap, needSendTask=True, needOpenPort=True):
             if (needOpenPort is True) and (needSendTask is True):
                 time.sleep(2)
                 result = sendTask(PortList, serialObject, ['?', 0])
-                getModelAndVersion(result)
+                if getModelAndVersion(result):
+                    disableRandomAndGyroFor6DoF(PortList, serialObject)
             success = True
 
         except Exception as e:
